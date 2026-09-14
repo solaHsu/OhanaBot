@@ -1,0 +1,9 @@
+# Ohana 隐私词表格式基线，UTF-8。
+# 每行一个需屏蔽的字面文本；空行及以 # 开头的行忽略。
+# 不支持正则、通配符及行内注释；匹配规则见 privacy-spec.md。
+# 以 # 开头的实际词条需写成 \#开头的文本。
+# 本文件不存真实资料；本地有效词条写入 runtime/privacy/lexicon.local.txt。
+# 以下仅为注释示例，不参与匹配，也不构成可用的生产词表：
+# 示例真实姓名
+# example-person@example.invalid
+# 示例内部群名
