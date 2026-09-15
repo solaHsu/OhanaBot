@@ -24,7 +24,7 @@ Ohana/
 ├── bot/                        # Ohana 主体
 │   ├── memory/                 # 记忆系统
 │   │   ├── soul.md             # 灵魂规范：身份/原则/价值观（v1，已冻结）
-│   │   ├── style.md            # 语言风格与输出约束（v1，已冻结）
+│   │   ├── style.md            # 语言风格提示词（v1，已冻结）
 │   │   └── conversations/      # 记忆：people.md 人物画像 + daily 日简述归档（规划）
 │   └── engine/                 # 发言引擎（规划）
 |       ├── context             # 上下文组装器
