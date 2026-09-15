@@ -26,6 +26,8 @@ Ohana/
 │   │   ├── soul.md             # 灵魂规范：身份/原则/价值观（v1，已冻结）
 │   │   ├── style.md            # 语言风格提示词（v1，已冻结）
 │   │   └── conversations/      # 记忆：people.md 人物画像 + daily 日简述归档（规划）
+│   ├── tools/                  # 工具集（Agent Skill等）
+│   │   └── TODO             
 │   └── engine/                 # 发言引擎（规划）
 |       ├── context             # 上下文组装器
 |       ├── onebot              # OneBot 11 接入：HTTP API 客户端 + 事件服务器 + 消息解析
