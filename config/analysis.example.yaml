@@ -1,0 +1,58 @@
+# Ohana 资料分析配置模板（不含任何真实资料，可提交版本）。
+# 使用方式：复制为 config/analysis.local.yaml 并填写本地来源、机器人名单与候选成员。
+# 本地配置包含原始标识，不提交（见 .gitignore）。
+#
+# 运行：
+#   python scripts/01_preprocess.py --input content --output analysis --config config/analysis.local.yaml
+#   python scripts/02_sample.py --input analysis/corpus --output analysis/samples --seed 42
+
+schema_version: 1
+
+# 统计展示时区；存储统一 UTC。
+timezone: Asia/Shanghai
+
+# 显式来源清单：source_id 用于产物溯源，path 相对项目根目录。
+# 留空时脚本会退化为扫描 --input 目录（*.json 为聊天导出，posts/ 为博客）。
+sources:
+  - source_id: src-example-a
+    kind: chat_export
+    path: content/group_example.json
+  - source_id: src-example-b
+    kind: blog_posts
+    path: content/posts
+
+# 候选参考成员：键为 QQ 号字符串（禁止浮点转换）。
+# 未在此列出的成员只生成逐成员观察，不参与人格合成。
+candidates:
+  "10001":
+    role: primary_reference
+    weight: 1.0
+    is_blog_author: true
+    note: "示例：博客作者与导出账号为同一人（由项目所有者确认）"
+
+# 显式排除的机器人账号：uin 或 uid 命中即排除；
+# 机器人消息不进入语料与成员统计，对机器人的 at 提及不计入人类互动。
+bots:
+  - uin: "20002"
+    uid: "u_example_bot_uid"
+    name: "示例机器人"
+
+# 本地身份映射（别名表，不提交）。首次运行自动创建，后续运行复用保持别名稳定。
+identity_map_path: runtime/identity_map.local.json
+
+privacy:
+  public_lexicon: docs/lexicon-privacy.txt
+  local_lexicon: runtime/privacy/lexicon.local.txt
+
+stats:
+  top_words: 40            # 每名成员高频词数量
+  top_phrases: 20          # 每名成员口头禅候选数量
+  min_phrase_messages: 5   # 口头禅候选的最少出现消息数
+
+sampling:
+  seed: 42
+  max_samples_per_member: 200
+  member_overrides: {}     # 按成员别名覆盖抽样上限，如 {"m01": 800}（别名见 analysis/members/README.md）
+  context_before: 3
+  context_after: 3
+  holdout_days: 30         # 最近 N 天作为评估留出时段
