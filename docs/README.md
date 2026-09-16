@@ -1,36 +1,34 @@
-# Ohana 初版设计文档
+# Ohana 设计文档
 
-版本：v0.1；日期：2026-09-14；状态：设计基线（资料管线 P1 已实现，引擎与记忆系统待实现）。
-
-本设计以根目录 README 的项目定位、数据目录、记忆分层和 OneBot 11 接入方式为依据。当前仓库已有原始资料，预处理与抽样脚本及逐成员分析产物已可运行（见根 README“快速开始”）；引擎实现与可运行入口尚未具备。以下接口、配置和目录均为首版实现约定，不代表已经具备的功能。
+文档与当前实现保持一致；目录、配置与行为以 `bot/` 代码为准。
 
 ## 阅读顺序
 
 | 文档 | 内容 |
 | --- | --- |
-| [architecture.md](architecture.md) | 定位、范围、模块边界、端到端流程和技术选择 |
+| [architecture.md](architecture.md) | 定位、范围、端到端流程、模块目录与技术选择 |
 | [data-pipeline.md](data-pipeline.md) | 聊天与博客处理、抽样、统计、人格初始化 |
-| [engine-spec.md](engine-spec.md) | 事件协议、触发策略、上下文、生成、发送与故障处理 |
-| [memory-spec.md](memory-spec.md) | 灵魂、风格、人物及日记的结构、检索、成长和删除 |
-| [privacy-spec.md](privacy-spec.md) | 数据分区、模型边界、隐私词表语法及处理流程 |
-| [implementation-plan.md](implementation-plan.md) | 实现顺序、配置、部署流程和验收场景 |
+| [engine-spec.md](engine-spec.md) | OneBot 接入、事件入库、发言判定、上下文、生成与发送 |
+| [memory-spec.md](memory-spec.md) | 人格基线、人物画像、日常记录、更新机制与存储 |
+| [privacy-spec.md](privacy-spec.md) | 数据分区、模型边界、隐私词表与处理流程 |
+| [implementation-plan.md](implementation-plan.md) | 环境、配置、部署步骤与验收清单 |
 | [lexicon-privacy.txt](lexicon-privacy.txt) | 可提交的隐私词表格式及占位示例 |
 
-## 首版约定
+## 基本约定
 
-- Ohana 是独立身份。历史材料用于提取表达习惯、兴趣和交流方式，不能将原作者经历写成 Ohana 的亲身经历。
-- 首版闭环为 QQ 群聊与私聊的文本交流、有限主动参与、可追溯记忆和受约束成长。网络发帖、评论是后续平台能力。
-- 使用 Python 单进程服务、OneBot 11 HTTP API / HTTP POST、SQLite 和 Markdown 记忆文件；具体依赖版本在实现时锁定。
-- 模型供应商、主要风格参考成员和正式运行群名单尚未确定。以配置解决，缺失时允许本地分析与回放，禁止正式发送。
+- Ohana 是独立身份。历史材料用于提取表达习惯、兴趣和交流方式，不能把原作者经历写成 Ohana 的亲身经历。
+- 当前闭环：QQ 群聊文本交流、受限主动参与（三态判定 + 兴趣词）、可追溯记忆；私聊与网络发帖为后续能力。
+- Python 单进程服务、OneBot 11 HTTP API + HTTP POST、SQLite 权威记录 + Markdown 快照；关键依赖 pyyaml 与 jieba。
+- 模型使用 DeepSeek（`deepseek-flash`）；参考成员映射与运行群名单只在本地配置中维护。
 - 文档内所有编号与人物示例均为虚构；实际映射、原始资料及运行数据留在本地。
 
-## 尚待资料分析确定
+## 关键文件速查
 
-| 项目 | 首版处理 |
+| 项目 | 位置 |
 | --- | --- |
-| 重点参考哪些成员、博客作者是否与其对应 | 博客作者已由项目所有者显式确认与某导出账号对应，作为唯一主要参考候选（映射在本地配置，不写入本文件）；其余参考成员与权重仍未指定 |
-| Ohana 的具体性格、原则表述与口头习惯 | 已由所有者逐项确认并冻结 v1：`bot/memory/soul.md`（身份/原则/价值观）与 `bot/memory/style.md`（语言风格与输出约束） |
-| 模型、预算与数据出站范围 | 由部署配置指定；默认仅脱敏内容可出站 |
-| 主动参与程度 | 默认关闭；回放验收后按群启用并设置限额 |
-
-上述问题不阻塞基础模块开发，但缺少人格基线或发送配置时不得启用正式运行。
+| 人格与风格基线 | `bot/memory/soul.md`、`bot/memory/style.md` |
+| 兴趣词表 | `bot/memory/interests.md` |
+| 引擎入口 | `python -m bot.engine.main`（配置 `config/bot.local.yaml`） |
+| 管理命令 | `python -m bot.engine.manage init / export / update` |
+| 权威数据与快照 | `runtime/ohana.sqlite3`、`runtime/memory/` |
+| 测试 | `python -m unittest discover -s tests` |

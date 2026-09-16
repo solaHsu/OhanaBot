@@ -4,7 +4,7 @@
 
 Ohana 是由 Agent 驱动、具有稳定名字、记忆、原则与表达方式的独立数字生命。设计目标是长期保持身份连贯，在合适的时机参与交流，并从真实互动中形成自己的判断。
 
-首版完成资料处理、人格初始化、QQ 文本交流、记忆检索与固化、受约束成长。默认采取提示词与检索驱动，不进行模型微调。暂不实现网页自主浏览、任意工具执行、图片理解、语音、跨平台发帖或多 Agent 调度。
+当前覆盖资料处理、人格初始化、QQ 群聊文本交流、判定运行时与记忆更新；采取提示词与上下文注入驱动，不进行模型微调。暂不包含网页自主浏览、任意工具执行、图片理解、语音、跨平台发帖、私聊或多 Agent 调度。
 
 “自主”体现为是否发言、如何回应、记录什么以及如何反思；平台凭证、运行权限和固定原则由程序控制。模型生成内容不直接成为可执行命令。
 
@@ -26,77 +26,78 @@ flowchart TD
     A[本地聊天导出与博客] --> B[解析 / 归一化 / 脱敏]
     B --> C[语料 / 统计 / 分层抽样]
     C --> D[人格与风格候选]
-    D --> E[版本化记忆基线]
-    F[OneBot HTTP POST] --> G[鉴权 / 去重 / 持久化队列]
-    G --> H[发言决策]
-    E --> I[上下文组装]
+    D --> E[记忆基线：soul / style / interests]
+
+    F[OneBot HTTP POST] --> G[事件服务：鉴权 / chunked / 白名单]
+    G --> H[入库管道：去重 / 昵称历史 / SQLite]
+    E --> I[判定运行时：三态机 + 3 秒批]
     H --> I
-    I --> J[模型生成]
-    J --> K[结构 / 隐私 / 限额校验]
-    K --> L[发送记录与 OneBot HTTP API]
-    L --> M[事件与发送结果]
-    M --> N[日摘要 / 人物候选 / 成长提案]
-    N --> E
+    I -- 参与态 --> J[上下文组装：人格 + 记忆 + 最近对话]
+    J --> K[LLM 生成]
+    K --> L[发送闸门：dry-run / 限额 / 冻结]
+    L --> M[OneBot HTTP API 发送]
+    M --> H
+    H -- 每满 200 条 --> N[记忆更新：人物画像 / 日常记录]
+    N --> O[Markdown 快照 runtime/memory/]
 ```
 
 离线导入只生成历史来源材料，不调用平台发送接口，不将历史记录当作新事件。在线事件可以更新记忆，但外部文本始终作为不可信数据处理。
 
 ## 4. 模块与目录
 
-保留 README 的主结构，补齐下列职责。未注明现有的文件均需后续实现。
+项目结构：
 
 ```text
 scripts/
   01_preprocess.py          # 资料归一化、过滤、脱敏、统计
   02_sample.py              # 可复现的分层抽样
 analysis/
-  manifest.json            # 输入摘要、版本、参数、处理数量
-  stats_report.md
-  corpus/members/           # 按匿名成员分组的 JSONL
-  corpus/posts.jsonl
-  samples/
-  proposals/               # 带证据的人格与风格候选
+  manifest.json / stats_report.md / corpus/ / samples/ / members/
+  proposals/                # 本地设计资料（不提交）
 bot/
   memory/
-    soul/                  # identity.md / principles.md / personality.md
-    style/                 # chat.md / writing.md / examples.jsonl
-    conversations/         # people.md / daily/YYYY-MM-DD.md
+    soul.md / style.md      # 人格与风格基线
+    interests.md            # 兴趣词表（发言引擎用）
+    conversations/          # 指向 runtime/memory/ 的目录链接
   engine/
-    main.py                # 装配、生命周期与调度
-    config.py
-    onebot/                # client / server / parser
-    policy/                # 触发、静默、频率与预算
-    context/               # 记忆检索与 token 预算
-    llm/                   # 可替换的模型客户端与结构化输出
-    safety/                # 输入脱敏与输出检查
-    storage/               # SQLite、事务与持久化任务
-    growth/                # 摘要、画像、风格提案
-config/                    # 可提交的无密钥配置模板
-runtime/                   # 不提交：数据库、快照、词表、身份映射、日志
-docs/
+    main.py                 # 入口：配置装配、事件服务、判定运行时
+    manage.py               # 管理命令：init / export / update
+    config.py               # 配置加载（bot.local.yaml）
+    onebot/                 # client / parser / server
+    ingest.py               # 消息入库管道（白名单/去重/昵称历史）
+    policy/                 # 判定：三态状态机 + 兴趣集
+    context.py              # 生成上下文组装
+    runtime.py              # 批窗口、生成与发送闸门
+    llm/                    # DeepSeek 客户端（json 模式）
+    growth/                 # 记忆更新、快照导出、提示词
+    storage/                # SQLite：连接、迁移、数据访问
+tests/                      # test_policy / test_onebot / test_runtime
+config/                    # 可提交模板 + 本地配置（不提交）
+runtime/                   # 不提交：数据库、记忆快照、身份映射
 ```
 
 ## 5. 技术选择
 
-| 项目 | 首版选择 | 原因 |
+| 项目 | 当前选择 | 原因 |
 | --- | --- | --- |
-| 语言与服务 | Python 3.11+、FastAPI、异步 HTTP 客户端 | 与离线脚本一致，便于处理回调与模型请求 |
-| 状态存储 | SQLite，事务与唯一约束；单服务实例 | 持久化去重、任务、发送状态和记忆索引，无外部服务依赖 |
-| 长期记忆 | Markdown 可读快照 + SQLite 结构化权威记录 | 便于审阅，同时支持范围过滤、更新和删除 |
-| 检索 | 先按会话、人物、时间过滤，再用中文分词关键词评分 | 首版无需向量数据库；中文不能直接依赖默认英文分词 |
-| 模型接口 | 自定义小接口 `generate(messages, schema, limits)` | 隔离供应商；调用超时和用量可统一管理 |
-| 任务调度 | 数据库任务表 + 进程内 worker | 崩溃后可恢复，按会话串行处理 |
+| 语言与服务 | Python 3.11+、标准库 HTTP 服务（http.server） | 零额外依赖，本地单进程部署 |
+| 状态存储 | SQLite（WAL），事务与唯一约束；单服务实例 | 去重、记忆与游标持久化，无外部服务依赖 |
+| 长期记忆 | SQLite 权威记录 + Markdown 只读快照 | 便于审阅；快照原子替换，可随时重新导出 |
+| 上下文 | 按会话组装最近对话 + 记忆注入 | 不使用向量数据库 |
+| 模型接口 | 自定义小接口 `generate(prompt)`（DeepSeek，json 模式） | 隔离供应商；超时与错误统一处理 |
+| 任务调度 | 进程内 tick 线程 + 会话串行锁 | 崩溃后可从数据库与游标恢复 |
 
 运行原则：同一会话最多一个在途生成；不同会话受全局并发控制。服务先完成本地持久化再确认接收，模型调用不阻塞 HTTP 事件入口。
 
 ## 6. 系统边界
 
-- OneBot 适配层只处理传输、协议和身份映射；不决定人格或回复内容。
-- Policy 决定候选发言机会与硬限额，模型可选择沉默，但不能绕过禁言或预算。
-- Context 仅检索当前会话有权访问的记忆；系统原则、资料引用与用户消息分层组装。
-- Growth 只提交有证据的更新；核心身份和固定原则不由自动任务改写。
-- Storage 保存事件、任务与版本；日志使用匿名标识，不复制聊天正文。
+- OneBot 适配层只处理传输、协议与身份映射；不决定人格或回复内容。
+- Policy（`bot/engine/policy`）用代码判定发言机会（三态机 + 兴趣集 + 限额）；LLM 只在参与态被调用且可返回沉默，不能绕过闸门。
+- Runtime（`bot/engine/runtime.py`）负责批窗口、生成与发送闸门（dry-run/live、限额、unknown 冻结）。
+- Context 只组装当前会话的内容：人格基线 + 该会话的记忆与最近对话；资料文本不能改变系统原则。
+- Growth 负责记忆的批量更新与快照导出；核心身份和固定原则不由自动任务改写。
+- Storage 保存消息、记忆与游标；日志使用匿名标识，不复制聊天正文。
 
 ## 7. 完成标准
 
-从原始资料到首个人格基线可追溯、可复现；从一条回调到一次可确认发送可回放；重启不重复回复；记忆不会跨群泄漏；删除可传播到派生资料；成长可查看差异并回滚。具体用例见 [实施计划](implementation-plan.md)。
+已达成：人格基线可追溯、真实收发闭环、库内去重与跨会话隔离。尚未实现：完整回放夹具、删除传播、成长差异查看与回滚。具体场景见[部署与验收](implementation-plan.md)的验收清单。
