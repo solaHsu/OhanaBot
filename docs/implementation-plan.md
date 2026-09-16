@@ -35,6 +35,8 @@ engine:
   merge_window_seconds: 3
   replies_per_hour: 20
   max_reply_characters: 300
+  max_images_per_call: 3
+  image_max_dimension: 768
 
 llm:
   model: deepseek-flash

@@ -67,6 +67,7 @@ bot/
     ingest.py               # 消息入库管道（白名单/去重/昵称历史）
     policy/                 # 判定：三态状态机 + 兴趣集
     context.py              # 生成上下文组装
+    media.py                # 图片附件取回与编码（多模态生成）
     runtime.py              # 批窗口、生成与发送闸门
     llm/                    # DeepSeek 客户端（json 模式）
     growth/                 # 记忆更新、快照导出、提示词

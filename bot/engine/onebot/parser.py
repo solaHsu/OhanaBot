@@ -34,6 +34,14 @@ _CQ_UNESCAPE = (("&#44;", ","), ("&#91;", "["), ("&#93;", "]"), ("&amp;", "&"))
 
 
 @dataclass(frozen=True)
+class ImageRef:
+    """图片段里的获取途径（优先 url 下载，本地 file 兜底）。"""
+
+    url: str = ""
+    file: str = ""
+
+
+@dataclass(frozen=True)
 class IncomingMessage:
     """解析后的群消息（内部统一格式）。"""
 
@@ -47,6 +55,7 @@ class IncomingMessage:
     mentions_self: bool
     replies_to: str | None
     sent_at: str  # UTC ISO8601
+    images: tuple[ImageRef, ...] = ()  # 图片引用（供多模态生成）
 
 
 def parse_message_event(payload: dict, self_id: str | None = None) -> IncomingMessage | None:
@@ -62,7 +71,7 @@ def parse_message_event(payload: dict, self_id: str | None = None) -> IncomingMe
         return None
 
     effective_self = str(self_id or payload.get("self_id") or "")
-    text, mentions, replies_to = _parse_message_field(payload.get("message"))
+    text, mentions, replies_to, images = _parse_message_field(payload.get("message"))
     sender = payload.get("sender") or {}
     display_name = str(sender.get("card") or sender.get("nickname") or user_id)
 
@@ -83,13 +92,15 @@ def parse_message_event(payload: dict, self_id: str | None = None) -> IncomingMe
         mentions_self=bool(effective_self and effective_self in mentions),
         replies_to=replies_to,
         sent_at=sent_at,
+        images=tuple(images),
     )
 
 
-def _parse_message_field(message) -> tuple[str, list[str], str | None]:
-    """返回 (文本, 被 @ 的号码列表, 引用的消息 ID)。"""
+def _parse_message_field(message) -> tuple[str, list[str], str | None, list[ImageRef]]:
+    """返回 (文本, 被 @ 的号码列表, 引用的消息 ID, 图片引用列表)。"""
     mentions: list[str] = []
     replies_to: str | None = None
+    images: list[ImageRef] = []
     parts: list[str] = []
 
     if isinstance(message, list):  # 消息段数组（优先）
@@ -107,6 +118,9 @@ def _parse_message_field(message) -> tuple[str, list[str], str | None]:
                     parts.append(f"@{qq}")
             elif seg_type == "reply":
                 replies_to = str(data.get("id") or "") or None
+            elif seg_type == "image":
+                images.append(ImageRef(url=str(data.get("url") or ""), file=str(data.get("file") or "")))
+                parts.append("[图片]")
             else:
                 parts.append(_PLACEHOLDERS.get(seg_type, f"[{seg_type}]"))
     elif isinstance(message, str):  # CQ 字符串（兼容）
@@ -123,13 +137,18 @@ def _parse_message_field(message) -> tuple[str, list[str], str | None]:
                     parts.append(f"@{qq}")
             elif cq_type == "reply":
                 replies_to = str(params.get("id") or "") or None
+            elif cq_type == "image":
+                images.append(
+                    ImageRef(url=str(params.get("url") or ""), file=str(params.get("file") or ""))
+                )
+                parts.append("[图片]")
             elif cq_type != "text":
                 parts.append(_PLACEHOLDERS.get(cq_type, f"[{cq_type}]"))
         parts.append(_unescape_cq(message[position:]))
     elif message is not None:
         parts.append(str(message))
 
-    return "".join(parts), mentions, replies_to
+    return "".join(parts), mentions, replies_to, images
 
 
 def _unescape_cq(text: str) -> str:

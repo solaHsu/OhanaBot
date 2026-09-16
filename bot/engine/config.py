@@ -60,6 +60,8 @@ class EngineConfig:
     merge_window_seconds: float = 3.0  # 参与态批窗口
     replies_per_hour: int = 20  # 每小时 LLM 调用上限
     max_reply_characters: int = 300  # 单条回复长度上限
+    max_images_per_call: int = 3  # 每次生成附带的本批图片上限
+    image_max_dimension: int = 768  # 图片压缩后长边上限（0 表示不压缩）
     admins: list[str] = field(default_factory=list)  # /exit 等指令的可用账号
     onebot: OneBotConfig = field(default_factory=OneBotConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -83,6 +85,7 @@ def load_config(path: Path | str | None = None) -> EngineConfig:
     self_id = onebot_raw.get("expected_self_id")
     admins_raw = data.get("admins") or onebot_raw.get("allowed_private_users") or []
     llm_raw = data.get("llm") or {}
+    image_max_dimension_raw = engine_raw.get("image_max_dimension")
     return EngineConfig(
         mode=str(data.get("mode") or "dry_run"),
         database=database,
@@ -90,6 +93,8 @@ def load_config(path: Path | str | None = None) -> EngineConfig:
         merge_window_seconds=float(engine_raw.get("merge_window_seconds") or 3.0),
         replies_per_hour=int(engine_raw.get("replies_per_hour") or 20),
         max_reply_characters=int(engine_raw.get("max_reply_characters") or 300),
+        max_images_per_call=int(engine_raw.get("max_images_per_call") or 3),
+        image_max_dimension=int(image_max_dimension_raw) if image_max_dimension_raw is not None else 768,
         admins=[str(uid) for uid in admins_raw],
         onebot=OneBotConfig(
             api_base=str(onebot_raw.get("api_base") or "http://127.0.0.1:3000"),

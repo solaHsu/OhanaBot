@@ -21,6 +21,7 @@ PROMPT_TEMPLATE = PROMPT_PATH.read_text(encoding="utf-8")
 _BUSINESS_TZ = timezone(timedelta(hours=8))  # Asia/Shanghai（无夏令时）
 
 MUST_REPLY_NOTE = "（注意：上面这批消息在直接找 Ohana，必须给出回复，不能返回 silence。）"
+IMAGE_NOTE = "（本批消息里 [图片] 的实际画面已随提示一并提供，可直接看图内容。）"
 ENTRIES_PER_PERSON = 5
 RECENT_LOGS = 2
 
@@ -41,6 +42,7 @@ def build_reply_prompt(
     batch: list,
     must_reply: bool,
     recent_limit: int = 30,
+    has_images: bool = False,
 ) -> str:
     """把 人格 + 记忆 + 最近对话 + 本批消息 拼成一次生成的提示词。"""
     batch_ids = {message.message_id for message in batch}
@@ -55,6 +57,7 @@ def build_reply_prompt(
         .replace("{profiles}", _render_profiles(store, platform, conversation_id, user_ids))
         .replace("{recent}", "\n".join(_format_row(row) for row in recent) or "（暂无）")
         .replace("{batch}", "\n".join(_format_batch(message) for message in batch))
+        .replace("{image_note}", IMAGE_NOTE if has_images else "")
         .replace("{must_note}", MUST_REPLY_NOTE if must_reply else "")
     )
 

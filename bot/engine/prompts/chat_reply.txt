@@ -17,6 +17,7 @@
 
 【本批新消息】
 {batch}
+{image_note}
 {must_note}
 
 【输出】只输出一个 json 对象，不要解释、不要多余文字：

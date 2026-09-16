@@ -18,6 +18,7 @@ from typing import Callable
 
 from bot.engine.config import EngineConfig
 from bot.engine.context import build_reply_prompt, load_persona, parse_reply
+from bot.engine.media import collect_image_data_urls
 from bot.engine.onebot.parser import IncomingMessage
 from bot.engine.policy import ConversationPolicy, MessageEvent, PolicyConfig, load_interests
 from bot.engine.storage.db import now_iso
@@ -187,11 +188,31 @@ class EngineRuntime:
                 logger.info("%s：本小时调用已达上限（%d），跳过本批", conversation_id, len(conv.call_times))
                 return
             conv.call_times.append(now)
+            image_refs = [ref for message in batch for ref in message.images]
+        images = (
+            collect_image_data_urls(
+                image_refs,
+                limit=self.config.max_images_per_call,
+                max_dimension=self.config.image_max_dimension,
+            )
+            if image_refs
+            else []
+        )
+        if images:
+            logger.info("%s：附带 %d 张图片参与生成", conversation_id, len(images))
+        with self.lock:
             prompt = build_reply_prompt(
-                self._soul, self._style, self.store, PLATFORM, conversation_id, batch, must_reply
+                self._soul,
+                self._style,
+                self.store,
+                PLATFORM,
+                conversation_id,
+                batch,
+                must_reply,
+                has_images=bool(images),
             )
         try:
-            content = self.generate(prompt)
+            content = self.generate(prompt, images=images or None)
         except Exception as exc:
             logger.warning("%s：生成失败：%s", conversation_id, exc)
             return

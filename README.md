@@ -36,6 +36,7 @@ Ohana/
 │       ├── ingest.py           # 消息入库管道（白名单/去重/昵称历史）
 │       ├── policy/             # 发言判定：三态状态机 + 兴趣集（纯代码）
 │       ├── context.py          # 生成上下文组装（人格 + 记忆 + 对话）
+│       ├── media.py            # 图片附件取回（多模态生成）
 │       ├── runtime.py          # 判定运行时：批窗口 / 生成 / 发送闸门
 │       ├── llm/                # 模型客户端（DeepSeek）
 │       ├── growth/             # 记忆更新与快照导出
@@ -54,7 +55,7 @@ Ohana/
 
 预处理与抽样覆盖聊天导出与博客的归一化、脱敏、统计、分层抽样与逐成员观察。
 
-1. 安装依赖：Python 3.11+，`pip install pyyaml jieba`。
+1. 安装依赖：Python 3.11+，`pip install pyyaml jieba pillow`（pillow 用于图片压缩，未安装则按原图发送）。
 2. 复制 `config/analysis.example.yaml` 为 `config/analysis.local.yaml`，填写本地来源、
    机器人排除名单与候选参考成员（该文件不提交）。
 3. 运行：

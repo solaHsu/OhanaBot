@@ -89,6 +89,8 @@ class ParserTests(unittest.TestCase):
         self.assertIn("@424242", message.text)
         self.assertIn("看看这个", message.text)
         self.assertIn("[图片]", message.text)
+        self.assertEqual(len(message.images), 1)
+        self.assertEqual(message.images[0].file, "x.jpg")
         self.assertTrue(message.sent_at.endswith("Z"))
 
     def test_non_message_and_private_ignored(self):
@@ -111,6 +113,8 @@ class ParserTests(unittest.TestCase):
         self.assertTrue(message.mentions_self)
         self.assertEqual(message.replies_to, "666")
         self.assertIn("[图片]", message.text)
+        self.assertEqual(len(message.images), 1)
+        self.assertEqual(message.images[0].file, "x.jpg")
         self.assertIn("你好", message.text)
         self.assertIn("结束", message.text)
 

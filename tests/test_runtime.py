@@ -12,7 +12,7 @@ from pathlib import Path
 
 from bot.engine.config import EngineConfig, OneBotConfig
 from bot.engine.context import parse_reply
-from bot.engine.onebot.parser import IncomingMessage
+from bot.engine.onebot.parser import ImageRef, IncomingMessage
 from bot.engine.runtime import EngineRuntime
 from bot.engine.storage import db
 from bot.engine.storage.memory_store import MemoryStore
@@ -20,7 +20,9 @@ from bot.engine.storage.memory_store import MemoryStore
 COUNTER = itertools.count(1)
 
 
-def make_msg(text: str, *, user_id: str = "10001", mentions_self: bool = False) -> IncomingMessage:
+def make_msg(
+    text: str, *, user_id: str = "10001", mentions_self: bool = False, images: tuple = ()
+) -> IncomingMessage:
     return IncomingMessage(
         conversation_id="group:888888",
         conversation_type="group",
@@ -32,6 +34,7 @@ def make_msg(text: str, *, user_id: str = "10001", mentions_self: bool = False) 
         mentions_self=mentions_self,
         replies_to=None,
         sent_at="2026-09-16T12:00:00Z",
+        images=tuple(images),
     )
 
 
@@ -75,11 +78,12 @@ class RuntimeTests(unittest.TestCase):
             admins=list(admins),
             onebot=OneBotConfig(expected_self_id="424242", allowed_groups=["888888"]),
         )
-        calls = {"prompts": [], "sends": []}
+        calls = {"prompts": [], "sends": [], "images": []}
         payload = reply_json or '{"action": "reply", "text": "收到捏"}'
 
-        def generate(prompt: str) -> str:
+        def generate(prompt: str, images=None) -> str:
             calls["prompts"].append(prompt)
+            calls["images"].append(list(images or []))
             return payload
 
         def send_group(conversation_id: str, text: str) -> dict:
@@ -111,6 +115,21 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["user_id"], "424242")
         self.assertEqual(rows[0]["text"], "收到捏")
+
+    def test_batch_images_attached(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "pic.png"
+        path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+        runtime, store, calls, now = self._make()
+        runtime.handle(
+            make_msg("看看这张图", mentions_self=True, images=(ImageRef(url="", file=str(path)),))
+        )
+        now[0] += timedelta(seconds=4)
+        runtime.tick()
+        self.assertEqual(len(calls["images"][0]), 1)
+        self.assertTrue(calls["images"][0][0].startswith("data:image/png;base64,"))
+        self.assertIn("已随提示一并提供", calls["prompts"][0])
 
     def test_must_reply_silence_is_skipped(self):
         runtime, store, calls, now = self._make(
@@ -156,6 +175,8 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(config.merge_window_seconds, 3.0)
         self.assertEqual(config.replies_per_hour, 20)
         self.assertEqual(config.max_reply_characters, 300)
+        self.assertEqual(config.max_images_per_call, 3)
+        self.assertEqual(config.image_max_dimension, 768)
         self.assertEqual(config.onebot.self_aliases, ["ohana", "欧哈娜"])
 
 

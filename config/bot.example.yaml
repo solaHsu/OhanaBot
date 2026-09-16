@@ -25,6 +25,8 @@ engine:
   merge_window_seconds: 3 # 参与态每 3 秒汇总一批
   replies_per_hour: 20 # 每小时 LLM 调用上限
   max_reply_characters: 300 # 单条回复长度上限
+  max_images_per_call: 3 # 每次生成附带的本批图片上限（多模态）
+  image_max_dimension: 768 # 图片长边上限（超大图自动压缩省 token；0 表示不压缩）
 
 llm:
   model: deepseek-flash
