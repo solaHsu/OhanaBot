@@ -1,0 +1,3 @@
+# 以下两个名字是指向运行时数据的目录链接（实际内容在 runtime/memory/，不提交）。
+persons/
+logs/
