@@ -59,6 +59,8 @@ bot/
     soul.md / style.md      # 人格与风格基线
     interests.md            # 兴趣词表（发言引擎用）
     conversations/          # 指向 runtime/memory/ 的目录链接
+  tools/
+    web.py                  # 网页抓取（链接正文注入生成上下文）
   engine/
     main.py                 # 入口：配置装配、事件服务、判定运行时
     manage.py               # 管理命令：init / export / update

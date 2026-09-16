@@ -27,6 +27,7 @@ engine:
   max_reply_characters: 300 # 单条回复长度上限
   max_images_per_call: 3 # 每次生成附带的本批图片上限（多模态）
   image_max_dimension: 768 # 图片长边上限（超大图自动压缩省 token；0 表示不压缩）
+  max_links_per_call: 2 # 每次生成抓取的链接上限（分享卡片正文注入）
 
 llm:
   model: deepseek-flash

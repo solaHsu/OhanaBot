@@ -28,6 +28,7 @@
 | --- | --- |
 | 人格与风格基线 | `bot/memory/soul.md`、`bot/memory/style.md` |
 | 兴趣词表 | `bot/memory/interests.md` |
+| 网页抓取 | `bot/tools/web.py` |
 | 引擎入口 | `python -m bot.engine.main`（配置 `config/bot.local.yaml`） |
 | 管理命令 | `python -m bot.engine.manage init / export / update` |
 | 权威数据与快照 | `runtime/ohana.sqlite3`、`runtime/memory/` |

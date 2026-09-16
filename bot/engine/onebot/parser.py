@@ -1,11 +1,13 @@
 """OneBot 11 消息事件解析。
 
 设计依据 docs/engine-spec.md §2：优先使用消息段数组，兼容 CQ 字符串；
-图片等转为类型占位；引用内的 at 不视作直接提及；私聊暂不进入本引擎。
+图片保留引用、卡片提取文本、其余媒体转为类型占位；引用内的 at 不视作直接提及；私聊暂不进入本引擎。
 """
 
 from __future__ import annotations
 
+import html
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -56,6 +58,7 @@ class IncomingMessage:
     replies_to: str | None
     sent_at: str  # UTC ISO8601
     images: tuple[ImageRef, ...] = ()  # 图片引用（供多模态生成）
+    links: tuple[str, ...] = ()  # 卡片跳转链接（供网页抓取）
 
 
 def parse_message_event(payload: dict, self_id: str | None = None) -> IncomingMessage | None:
@@ -71,7 +74,7 @@ def parse_message_event(payload: dict, self_id: str | None = None) -> IncomingMe
         return None
 
     effective_self = str(self_id or payload.get("self_id") or "")
-    text, mentions, replies_to, images = _parse_message_field(payload.get("message"))
+    text, mentions, replies_to, images, links = _parse_message_field(payload.get("message"))
     sender = payload.get("sender") or {}
     display_name = str(sender.get("card") or sender.get("nickname") or user_id)
 
@@ -93,14 +96,16 @@ def parse_message_event(payload: dict, self_id: str | None = None) -> IncomingMe
         replies_to=replies_to,
         sent_at=sent_at,
         images=tuple(images),
+        links=tuple(links),
     )
 
 
-def _parse_message_field(message) -> tuple[str, list[str], str | None, list[ImageRef]]:
-    """返回 (文本, 被 @ 的号码列表, 引用的消息 ID, 图片引用列表)。"""
+def _parse_message_field(message) -> tuple[str, list[str], str | None, list[ImageRef], list[str]]:
+    """返回 (文本, 被 @ 的号码列表, 引用的消息 ID, 图片引用列表, 卡片链接列表)。"""
     mentions: list[str] = []
     replies_to: str | None = None
     images: list[ImageRef] = []
+    links: list[str] = []
     parts: list[str] = []
 
     if isinstance(message, list):  # 消息段数组（优先）
@@ -121,6 +126,12 @@ def _parse_message_field(message) -> tuple[str, list[str], str | None, list[Imag
             elif seg_type == "image":
                 images.append(ImageRef(url=str(data.get("url") or ""), file=str(data.get("file") or "")))
                 parts.append("[图片]")
+            elif seg_type in ("json", "xml"):
+                card = _extract_card_text(seg_type, data.get("data"))
+                parts.append(f"[卡片：{card}]" if card else "[卡片]")
+                card_url = _extract_card_url(seg_type, data.get("data"))
+                if card_url:
+                    links.append(card_url)
             else:
                 parts.append(_PLACEHOLDERS.get(seg_type, f"[{seg_type}]"))
     elif isinstance(message, str):  # CQ 字符串（兼容）
@@ -142,16 +153,136 @@ def _parse_message_field(message) -> tuple[str, list[str], str | None, list[Imag
                     ImageRef(url=str(params.get("url") or ""), file=str(params.get("file") or ""))
                 )
                 parts.append("[图片]")
+            elif cq_type in ("json", "xml"):
+                raw_card = _unescape_cq(str(params.get("data") or ""))
+                card = _extract_card_text(cq_type, raw_card)
+                parts.append(f"[卡片：{card}]" if card else "[卡片]")
+                card_url = _extract_card_url(cq_type, raw_card)
+                if card_url:
+                    links.append(card_url)
             elif cq_type != "text":
                 parts.append(_PLACEHOLDERS.get(cq_type, f"[{cq_type}]"))
         parts.append(_unescape_cq(message[position:]))
     elif message is not None:
         parts.append(str(message))
 
-    return "".join(parts), mentions, replies_to, images
+    links = list(dict.fromkeys(links))[:3]
+    return "".join(parts), mentions, replies_to, images, links
 
 
 def _unescape_cq(text: str) -> str:
     for source, target in _CQ_UNESCAPE:
         text = text.replace(source, target)
     return text
+
+
+# ---------- 卡片（json / xml 段）文本提取 ----------
+
+_CARD_PROMPT_PREFIX_RE = re.compile(r"^\[[^\]]{1,12}\]\s*")
+_CARD_XML_TEXT_RE = r"<{tag}[^>]*>(.*?)</{tag}>"
+
+
+def _extract_card_text(kind: str, raw) -> str:
+    """从 json/xml 卡片里提取可读文本；失败返回空串。"""
+    text = str(raw or "")
+    if not text:
+        return ""
+    try:
+        if kind == "json":
+            fields = _card_fields_from_json(text)
+        else:
+            fields = _card_fields_from_xml(text)
+    except Exception:
+        return ""
+    parts: list[str] = []
+    for field in fields:
+        value = _clean_card_value(field)
+        if value and value not in parts:
+            parts.append(value)
+    return "；".join(parts)[:200]
+
+
+def _card_fields_from_json(raw: str) -> list[str]:
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        return []
+    fields: list[object] = [data.get("prompt"), data.get("desc")]
+    meta = data.get("meta")
+    if isinstance(meta, dict):
+        for value in meta.values():
+            if isinstance(value, dict):
+                fields += [value.get("title"), value.get("desc"), value.get("summary")]
+    return [field for field in fields if isinstance(field, str)]
+
+
+def _card_fields_from_xml(raw: str) -> list[str]:
+    fields: list[str] = []
+    brief = re.search(r"brief=[\"']([^\"']*)[\"']", raw)
+    if brief:
+        fields.append(brief.group(1))
+    for tag in ("title", "summary"):
+        match = re.search(_CARD_XML_TEXT_RE.format(tag=tag), raw, re.S)
+        if match:
+            fields.append(match.group(1))
+    source = re.search(r"<source[^>]*name=[\"']([^\"']*)[\"']", raw)
+    if source:
+        fields.append(source.group(1))
+    return fields
+
+
+def _clean_card_value(value: object) -> str:
+    """去 CDATA、解实体、压空白；若以【…】/[…] 开头则去前缀；截断到 100 字。"""
+    if not isinstance(value, str):
+        return ""
+    cleaned = value.replace("<![CDATA[", "").replace("]]>", "")
+    cleaned = html.unescape(cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = _CARD_PROMPT_PREFIX_RE.sub("", cleaned).strip()
+    return cleaned[:100]
+
+
+def _extract_card_url(kind: str, raw) -> str:
+    """从卡片里提取跳转链接（http/https）；找不到返回空串。"""
+    text = str(raw or "")
+    if not text:
+        return ""
+    try:
+        if kind == "json":
+            return _card_url_from_json(text)
+        return _card_url_from_xml(text)
+    except Exception:
+        return ""
+
+
+def _card_url_from_json(raw: str) -> str:
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        return ""
+    return _find_http_url(data)
+
+
+def _find_http_url(node, depth: int = 0) -> str:
+    if depth > 4:
+        return ""
+    if isinstance(node, dict):
+        for key in ("jumpUrl", "qqdocurl", "url"):
+            value = node.get(key)
+            if isinstance(value, str) and value.startswith(("http://", "https://")):
+                return value
+        for value in node.values():
+            found = _find_http_url(value, depth + 1)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for item in node:
+            found = _find_http_url(item, depth + 1)
+            if found:
+                return found
+    return ""
+
+
+def _card_url_from_xml(raw: str) -> str:
+    match = re.search(r"<msg[^>]*\burl=[\"']([^\"']+)[\"']", raw)
+    if match and match.group(1).startswith(("http://", "https://")):
+        return match.group(1)
+    return ""

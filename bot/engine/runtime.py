@@ -23,11 +23,14 @@ from bot.engine.onebot.parser import IncomingMessage
 from bot.engine.policy import ConversationPolicy, MessageEvent, PolicyConfig, load_interests
 from bot.engine.storage.db import now_iso
 from bot.engine.storage.memory_store import MemoryStore
+from bot.tools import web as web_tools
 
 logger = logging.getLogger(__name__)
 
 PLATFORM = "qq"
 MAX_BATCH_MESSAGES = 50
+RECENT_LINK_WINDOW_MINUTES = 10  # 近期卡片链接的记忆窗口
+MAX_RECENT_LINKS = 5  # 每会话保留的近期链接数
 FROZEN_RESET_HINT = "发送结果未知，已冻结该会话；请人工核对平台侧记录后重启引擎"
 
 
@@ -40,6 +43,7 @@ class ConversationState:
     batch_started: datetime | None = None
     call_times: list = field(default_factory=list)  # 滚动一小时的调用时间
     frozen: bool = False
+    recent_links: list = field(default_factory=list)  # [(url, 出现时间)] 近期卡片链接
 
     def clear_pending(self) -> None:
         self.pending = []
@@ -103,6 +107,7 @@ class EngineRuntime:
                 conv.clear_pending()
                 logger.info("%s：管理员 %s 执行 /exit → 旁观", message.conversation_id, message.user_id)
                 return
+            self._remember_links(conv, message, now)
             decision = conv.policy.on_message(
                 MessageEvent(
                     sender_id=message.user_id,
@@ -168,6 +173,19 @@ class EngineRuntime:
     def state(self, conversation_id: str) -> ConversationState | None:
         return self._convs.get(conversation_id)
 
+    def _remember_links(self, conv: ConversationState, message: IncomingMessage, now: datetime) -> None:
+        """记住消息里的卡片链接（旁观态也算），供随后被呼唤时抓取。"""
+        if not message.links:
+            return
+        window = RECENT_LINK_WINDOW_MINUTES * 60
+        conv.recent_links = [
+            (url, seen) for url, seen in conv.recent_links if (now - seen).total_seconds() <= window
+        ]
+        for url in message.links:
+            conv.recent_links = [(u, t) for u, t in conv.recent_links if u != url]
+            conv.recent_links.append((url, now))
+        conv.recent_links = conv.recent_links[-MAX_RECENT_LINKS:]
+
     def _replies_to_ohana(self, message: IncomingMessage) -> bool:
         if not message.replies_to or not self.self_id:
             return False
@@ -189,6 +207,14 @@ class EngineRuntime:
                 return
             conv.call_times.append(now)
             image_refs = [ref for message in batch for ref in message.images]
+            link_refs = [link for message in batch for link in message.links]
+            window = RECENT_LINK_WINDOW_MINUTES * 60
+            conv.recent_links = [
+                (url, seen) for url, seen in conv.recent_links if (now - seen).total_seconds() <= window
+            ]
+            for url, _seen in conv.recent_links:
+                if url not in link_refs:
+                    link_refs.append(url)
         images = (
             collect_image_data_urls(
                 image_refs,
@@ -200,6 +226,11 @@ class EngineRuntime:
         )
         if images:
             logger.info("%s：附带 %d 张图片参与生成", conversation_id, len(images))
+        pages = (
+            web_tools.collect_page_texts(link_refs, limit=self.config.max_links_per_call)
+            if link_refs
+            else []
+        )
         with self.lock:
             prompt = build_reply_prompt(
                 self._soul,
@@ -210,6 +241,7 @@ class EngineRuntime:
                 batch,
                 must_reply,
                 has_images=bool(images),
+                pages=pages,
             )
         try:
             content = self.generate(prompt, images=images or None)

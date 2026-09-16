@@ -119,6 +119,52 @@ class ParserTests(unittest.TestCase):
         self.assertIn("结束", message.text)
 
 
+    def test_json_card_extracted(self):
+        card = {
+            "app": "com.tencent.structmsg",
+            "view": "news",
+            "prompt": "[分享] 测试文章",
+            "meta": {
+                "news": {
+                    "title": "测试文章",
+                    "desc": "这是一段摘要",
+                    "jumpUrl": "https://example.com/a",
+                }
+            },
+        }
+        payload = sample_group_payload(message=[{"type": "json", "data": {"data": json.dumps(card)}}])
+        message = parse_message_event(payload, SELF_ID)
+        self.assertIn("测试文章", message.text)
+        self.assertIn("这是一段摘要", message.text)
+        self.assertNotIn("jumpUrl", message.text)
+        self.assertNotIn("com.tencent", message.text)
+        self.assertEqual(message.links, ("https://example.com/a",))
+
+    def test_xml_card_extracted(self):
+        card = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            "<msg serviceID='1' templateID='1' brief='[分享] 好文' url='https://x'>"
+            "<item><title><![CDATA[好文标题]]></title><summary>好文摘要</summary></item>"
+            "<source name='某来源'/></msg>"
+        )
+        payload = sample_group_payload(message=[{"type": "xml", "data": {"data": card}}])
+        message = parse_message_event(payload, SELF_ID)
+        self.assertIn("好文标题", message.text)
+        self.assertIn("好文摘要", message.text)
+        self.assertIn("某来源", message.text)
+        self.assertEqual(message.links, ("https://x",))
+
+    def test_broken_card_falls_back(self):
+        payload = sample_group_payload(
+            message=[
+                {"type": "json", "data": {"data": "not json"}},
+                {"type": "xml", "data": {"data": "<msg"}},
+            ]
+        )
+        message = parse_message_event(payload, SELF_ID)
+        self.assertIn("[卡片]", message.text)
+
+
 class SignatureTests(unittest.TestCase):
     def test_verify(self):
         import hashlib

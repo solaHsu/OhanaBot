@@ -19,6 +19,7 @@
 {batch}
 {image_note}
 {must_note}
+{pages}
 
 【输出】只输出一个 json 对象，不要解释、不要多余文字：
 {"action": "reply 或 silence", "text": "要发送的纯文本；action 为 silence 时留空字符串"}

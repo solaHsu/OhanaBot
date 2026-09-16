@@ -43,6 +43,7 @@ def build_reply_prompt(
     must_reply: bool,
     recent_limit: int = 30,
     has_images: bool = False,
+    pages: list | None = None,
 ) -> str:
     """把 人格 + 记忆 + 最近对话 + 本批消息 拼成一次生成的提示词。"""
     batch_ids = {message.message_id for message in batch}
@@ -59,6 +60,7 @@ def build_reply_prompt(
         .replace("{batch}", "\n".join(_format_batch(message) for message in batch))
         .replace("{image_note}", IMAGE_NOTE if has_images else "")
         .replace("{must_note}", MUST_REPLY_NOTE if must_reply else "")
+        .replace("{pages}", _render_pages(pages))
     )
 
 
@@ -96,6 +98,13 @@ def _format_time(sent_at: str) -> str:
     except ValueError:
         return sent_at
     return moment.astimezone(_BUSINESS_TZ).strftime("%Y-%m-%d %H:%M")
+
+
+def _render_pages(pages: list | None) -> str:
+    if not pages:
+        return ""
+    blocks = [f"### {url}\n{text}" for url, text in pages]
+    return "【对方分享的链接内容】\n" + "\n\n".join(blocks)
 
 
 def _render_logs(store: MemoryStore, platform: str, conversation_id: str) -> str:

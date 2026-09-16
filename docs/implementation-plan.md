@@ -37,6 +37,7 @@ engine:
   max_reply_characters: 300
   max_images_per_call: 3
   image_max_dimension: 768
+  max_links_per_call: 2
 
 llm:
   model: deepseek-flash
@@ -74,6 +75,7 @@ llm:
 | 记忆更新 | 满 200 条后 `manage update` 更新画像 / 条目 / 日常记录并前移游标；失败不写库 |
 | 快照 | `manage export` 只输出有变化的 Markdown 文件 |
 | 跨会话隔离 | 一个群的消息与画像不出现在其他会话的上下文里 |
+| 链接抓取 | 分享卡片（含随后被 @ 或提及）后正文注入生成；内网 / 非 http(s) 地址被拒绝 |
 
 ## 5. 故障处理
 

@@ -21,7 +21,12 @@ COUNTER = itertools.count(1)
 
 
 def make_msg(
-    text: str, *, user_id: str = "10001", mentions_self: bool = False, images: tuple = ()
+    text: str,
+    *,
+    user_id: str = "10001",
+    mentions_self: bool = False,
+    images: tuple = (),
+    links: tuple = (),
 ) -> IncomingMessage:
     return IncomingMessage(
         conversation_id="group:888888",
@@ -35,6 +40,7 @@ def make_msg(
         replies_to=None,
         sent_at="2026-09-16T12:00:00Z",
         images=tuple(images),
+        links=tuple(links),
     )
 
 
@@ -131,6 +137,40 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(calls["images"][0][0].startswith("data:image/png;base64,"))
         self.assertIn("已随提示一并提供", calls["prompts"][0])
 
+    def test_batch_link_pages_injected(self):
+        from bot.tools import web as web_tools
+
+        original = web_tools.collect_page_texts
+        web_tools.collect_page_texts = lambda urls, limit=2: [("https://example.com/a", "网页正文示例")]
+        self.addCleanup(setattr, web_tools, "collect_page_texts", original)
+        runtime, store, calls, now = self._make()
+        runtime.handle(make_msg("看看这个", mentions_self=True, links=("https://example.com/a",)))
+        now[0] += timedelta(seconds=4)
+        runtime.tick()
+        self.assertIn("对方分享的链接内容", calls["prompts"][0])
+        self.assertIn("网页正文示例", calls["prompts"][0])
+
+    def test_recent_card_link_fetched_later(self):
+        from bot.tools import web as web_tools
+
+        seen_urls = []
+        original = web_tools.collect_page_texts
+
+        def fake(urls, limit=2):
+            seen_urls.append(list(urls))
+            return [("https://example.com/card", "卡片正文内容")]
+
+        web_tools.collect_page_texts = fake
+        self.addCleanup(setattr, web_tools, "collect_page_texts", original)
+        runtime, store, calls, now = self._make()
+        # 卡片先到（旁观态，不触发）；随后被 @ 且本批不含链接
+        runtime.handle(make_msg("分享个卡片", links=("https://example.com/card",)))
+        runtime.handle(make_msg("读一下上面的内容", mentions_self=True))
+        now[0] += timedelta(seconds=4)
+        runtime.tick()
+        self.assertEqual(seen_urls, [["https://example.com/card"]])
+        self.assertIn("卡片正文内容", calls["prompts"][0])
+
     def test_must_reply_silence_is_skipped(self):
         runtime, store, calls, now = self._make(
             mode="live", send_enabled=True, reply_json='{"action": "silence", "text": ""}'
@@ -177,6 +217,7 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(config.max_reply_characters, 300)
         self.assertEqual(config.max_images_per_call, 3)
         self.assertEqual(config.image_max_dimension, 768)
+        self.assertEqual(config.max_links_per_call, 2)
         self.assertEqual(config.onebot.self_aliases, ["ohana", "欧哈娜"])
 
 
