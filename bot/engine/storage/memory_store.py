@@ -116,6 +116,18 @@ class MemoryStore:
         ).fetchone()
         return row is not None
 
+    def list_recent_messages(self, platform: str, conversation_id: str, limit: int = 30) -> list[dict]:
+        """该会话最近的消息（旧 → 新），供上下文组装。"""
+        rows = self.conn.execute(
+            """
+            SELECT message_id, user_id, display_name, text, sent_at FROM messages
+            WHERE platform = ? AND conversation_id = ?
+            ORDER BY id DESC LIMIT ?
+            """,
+            (platform, conversation_id, limit),
+        ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
     def count_pending_messages(self, platform: str, conversation_id: str) -> int:
         """游标之后未压缩的消息数（满 200 触发更新任务）。"""
         row = self.conn.execute(

@@ -29,6 +29,7 @@ class OneBotConfig:
     event_secret: str = ""
     allowed_groups: list[str] = field(default_factory=list)
     allowed_private_users: list[str] = field(default_factory=list)
+    self_aliases: list[str] = field(default_factory=lambda: ["ohana", "欧哈娜"])
 
     def resolve_access_token(self) -> str:
         """访问令牌：本地直接值优先，否则按变量名查环境变量。"""
@@ -40,11 +41,28 @@ class OneBotConfig:
 
 
 @dataclass
+class LLMConfig:
+    model: str = "deepseek-flash"
+    base_url: str = "https://api.deepseek.com"
+    api_key: str = ""  # 直接值（仅建议填在不提交的本地文件）
+    api_key_env: str = "DEEPSEEK_API_KEY"
+
+    def resolve_api_key(self) -> str:
+        """API Key：本地直接值优先，否则按变量名查环境变量。"""
+        return self.api_key or os.environ.get(self.api_key_env, "")
+
+
+@dataclass
 class EngineConfig:
     mode: str = "dry_run"
     database: Path = REPO_ROOT / "runtime" / "ohana.sqlite3"
     send_enabled: bool = False
+    merge_window_seconds: float = 3.0  # 参与态批窗口
+    replies_per_hour: int = 20  # 每小时 LLM 调用上限
+    max_reply_characters: int = 300  # 单条回复长度上限
+    admins: list[str] = field(default_factory=list)  # /exit 等指令的可用账号
     onebot: OneBotConfig = field(default_factory=OneBotConfig)
+    llm: LLMConfig = field(default_factory=LLMConfig)
 
 
 def load_config(path: Path | str | None = None) -> EngineConfig:
@@ -63,10 +81,16 @@ def load_config(path: Path | str | None = None) -> EngineConfig:
         database = REPO_ROOT / database
 
     self_id = onebot_raw.get("expected_self_id")
+    admins_raw = data.get("admins") or onebot_raw.get("allowed_private_users") or []
+    llm_raw = data.get("llm") or {}
     return EngineConfig(
         mode=str(data.get("mode") or "dry_run"),
         database=database,
         send_enabled=bool(engine_raw.get("send_enabled", False)),
+        merge_window_seconds=float(engine_raw.get("merge_window_seconds") or 3.0),
+        replies_per_hour=int(engine_raw.get("replies_per_hour") or 20),
+        max_reply_characters=int(engine_raw.get("max_reply_characters") or 300),
+        admins=[str(uid) for uid in admins_raw],
         onebot=OneBotConfig(
             api_base=str(onebot_raw.get("api_base") or "http://127.0.0.1:3000"),
             listen_host=str(onebot_raw.get("listen_host") or "127.0.0.1"),
@@ -79,5 +103,12 @@ def load_config(path: Path | str | None = None) -> EngineConfig:
             event_secret=str(onebot_raw.get("event_secret") or ""),
             allowed_groups=[str(gid) for gid in (onebot_raw.get("allowed_groups") or [])],
             allowed_private_users=[str(uid) for uid in (onebot_raw.get("allowed_private_users") or [])],
+            self_aliases=[str(alias) for alias in (onebot_raw.get("self_aliases") or ["ohana", "欧哈娜"])],
+        ),
+        llm=LLMConfig(
+            model=str(llm_raw.get("model") or "deepseek-flash"),
+            base_url=str(llm_raw.get("base_url") or "https://api.deepseek.com"),
+            api_key=str(llm_raw.get("api_key") or ""),
+            api_key_env=str(llm_raw.get("api_key_env") or "DEEPSEEK_API_KEY"),
         ),
     )

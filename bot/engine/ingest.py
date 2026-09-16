@@ -29,11 +29,12 @@ class MessageIngestor:
         config: EngineConfig,
         store: MemoryStore,
         on_message: Callable[[IncomingMessage], None] | None = None,
+        lock: threading.RLock | None = None,
     ):
         self.config = config
         self.store = store
         self.on_message = on_message
-        self._lock = threading.Lock()
+        self._lock = lock if lock is not None else threading.RLock()
         self.accepted = 0
         self.rejected = 0
         self.duplicated = 0
