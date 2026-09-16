@@ -27,10 +27,14 @@ def now_iso() -> str:
 
 
 def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    """打开（必要时创建）数据库，返回启用 WAL 的连接。"""
+    """打开（必要时创建）数据库，返回启用 WAL 的连接。
+
+    连接为共享对象（check_same_thread=False）：跨线程访问必须由调用方串行化
+    （当前写入路径由 ingest.MessageIngestor 的锁保证；健康检查用独立临时连接）。
+    """
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")

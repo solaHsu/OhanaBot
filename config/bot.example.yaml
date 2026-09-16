@@ -1,0 +1,21 @@
+# Ohana 引擎配置模板（可提交，不含密钥）。
+# 使用方法：复制为 config/bot.local.yaml 后填写；密钥只放环境变量。
+
+mode: dry_run # replay | dry_run | live
+database: runtime/ohana.sqlite3
+
+onebot:
+  api_base: http://127.0.0.1:3000
+  listen_host: 127.0.0.1
+  listen_port: 8080
+  event_path: /
+  expected_self_id: null # Ohana 独立 QQ 号（建议填写，用于身份校验与 @ 判定）
+  access_token_env: ONEBOT_ACCESS_TOKEN # 常规做法：令牌放环境变量，这里填变量名
+  event_secret_env: ONEBOT_EVENT_SECRET # 常规做法：签名密钥放环境变量，这里填变量名
+  access_token: "" # 可选：直接填令牌值（仅限不提交的本地文件）
+  event_secret: "" # 可选：直接填签名密钥值（仅限不提交的本地文件）
+  allowed_groups: [] # 允许参与的群号列表；空表示不接收任何群
+  allowed_private_users: [] # 预留：私聊仅管理员指令（后续实现）
+
+engine:
+  send_enabled: false # 正式发送开关（当前版本尚未接入发送链路）

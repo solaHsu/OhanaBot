@@ -108,6 +108,14 @@ class MemoryStore:
                 return int(row["id"])
             return int(cur.lastrowid)
 
+    def message_exists(self, platform: str, conversation_id: str, message_id: str) -> bool:
+        """该消息是否已入库（事件重复回调时去重用）。"""
+        row = self.conn.execute(
+            "SELECT 1 FROM messages WHERE platform = ? AND conversation_id = ? AND message_id = ?",
+            (platform, conversation_id, message_id),
+        ).fetchone()
+        return row is not None
+
     def count_pending_messages(self, platform: str, conversation_id: str) -> int:
         """游标之后未压缩的消息数（满 200 触发更新任务）。"""
         row = self.conn.execute(
