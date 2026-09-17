@@ -20,6 +20,7 @@ import re
 import sqlite3
 import threading
 from collections import defaultdict
+from pathlib import Path
 
 from bot.engine.storage.db import now_iso, transaction
 
@@ -802,6 +803,49 @@ class KnowledgeBase:
         self._index = index
         return index
 
+    # ---------- 快照导出 ----------
+
+    def export_snapshots(self, directory: Path | str) -> list[Path]:
+        """导出整合结果 Markdown 快照：实体档案.md / 主题综述.md（内容有变化才写）。"""
+        target = Path(directory)
+        entity_rows = self.conn.execute(
+            "SELECT title, text, updated_at FROM knowledge_summaries WHERE scope = 'entity' ORDER BY title"
+        ).fetchall()
+        cluster_rows = self.conn.execute(
+            "SELECT title, text, members, updated_at FROM knowledge_summaries"
+            " WHERE scope = 'cluster' ORDER BY updated_at DESC"
+        ).fetchall()
+        if not entity_rows and not cluster_rows:
+            return []
+        target.mkdir(parents=True, exist_ok=True)
+        updated: list[Path] = []
+        documents = (
+            (
+                "实体档案.md",
+                "知识库整合结果：每个实体的跨文档综合档案（manage knowledge consolidate 生成）",
+                entity_rows,
+                False,
+            ),
+            (
+                "主题综述.md",
+                "知识库整合结果：实体关系图划分的主题板块综述（manage knowledge consolidate 生成）",
+                cluster_rows,
+                True,
+            ),
+        )
+        for name, intro, rows, with_members in documents:
+            content = _render_snapshot(intro, rows, with_members)
+            if not rows:
+                continue
+            path = target / name
+            if path.exists() and path.read_text(encoding="utf-8") == content:
+                continue
+            path.write_text(content, encoding="utf-8")
+            updated.append(path)
+        if updated:
+            logger.info("知识整合快照导出：%d 个文件更新（%s）", len(updated), target)
+        return updated
+
     # ---------- 统计 ----------
 
     def stats(self) -> dict:
@@ -820,6 +864,29 @@ class KnowledgeBase:
             "edges": edges,
             "summaries": summaries,
         }
+
+
+def _render_snapshot(intro: str, rows: list, with_members: bool) -> str:
+    """渲染整合结果快照：标题 +（可选成员列表）+ 正文。"""
+    blocks = [
+        "# 知识整合结果",
+        "",
+        f"> {intro}，导出时间：{now_iso()[:10]}",
+        "",
+        "（回顾性快照，仅供阅读；权威数据在 runtime/ohana.sqlite3 的 knowledge_summaries 表）",
+        "",
+    ]
+    for row in rows:
+        blocks.append(f"## {row['title']}")
+        blocks.append("")
+        blocks.append(row["text"])
+        if with_members:
+            members = json.loads(row["members"] or "[]")
+            suffix = "…" if len(members) > 12 else ""
+            blocks.append("")
+            blocks.append(f"> 板块成员：{'、'.join(members[:12])}{suffix}")
+        blocks.append("")
+    return "\n".join(blocks).rstrip() + "\n"
 
 
 class _Index:

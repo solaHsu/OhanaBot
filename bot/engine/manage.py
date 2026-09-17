@@ -93,6 +93,9 @@ def main(argv: list[str] | None = None) -> int:
     p_consolidate.add_argument("--api-key", default="", help="API Key（默认读配置或环境变量）")
     p_consolidate.add_argument("--model", default=DEFAULT_MODEL, help=f"模型名（默认 {DEFAULT_MODEL}）")
     p_consolidate.add_argument("--dry-run", action="store_true", help="只预览将生成哪些档案/综述，不写库")
+    p_export = kn_sub.add_parser("export", help="导出整合结果 Markdown 快照（默认 runtime/knowledge/）")
+    p_export.add_argument("--config", default="", help="配置文件路径（默认 config/bot.local.yaml）")
+    p_export.add_argument("--out", default="runtime/knowledge", help="输出目录（相对仓库根；默认 runtime/knowledge）")
 
     args = parser.parse_args(argv)
     if args.command == "init":
@@ -192,6 +195,8 @@ def cmd_knowledge(args) -> int:
 
     if args.knowledge_command == "consolidate":
         return cmd_knowledge_consolidate(args, base, config)
+    if args.knowledge_command == "export":
+        return cmd_knowledge_export(args, base)
 
     return cmd_knowledge_rebuild(args, base, config)
 
@@ -294,6 +299,23 @@ def cmd_knowledge_consolidate(args, base, config) -> int:
         "完成：档案 生成 {entity_done} / 跳过 {entity_skipped} / 失败 {entity_failed}；"
         "综述 生成 {cluster_done} / 跳过 {cluster_skipped} / 失败 {cluster_failed}".format(**report)
     )
+    return 0
+
+
+def cmd_knowledge_export(args, base) -> int:
+    """导出实体档案与主题综述为 Markdown 快照（内容有变化才写）。"""
+    out = Path(args.out)
+    if not out.is_absolute():
+        out = REPO_ROOT / out
+    updated = base.export_snapshots(out)
+    if updated:
+        print(f"导出完成：{len(updated)} 个文件有更新")
+        for path in updated:
+            print(f"  {path}")
+    elif base.stats().get("summaries"):
+        print(f"导出完成：内容无变化（{out}）")
+    else:
+        print("知识库还没有档案/综述：先运行 python -m bot.engine.manage knowledge consolidate")
     return 0
 
 

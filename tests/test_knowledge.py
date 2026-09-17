@@ -388,6 +388,55 @@ class SummaryInjectionTests(unittest.TestCase):
         self.assertNotIn("知识档案", titles)
 
 
+class ExportSnapshotTests(unittest.TestCase):
+    def setUp(self):
+        self.conn, _ = make_store()
+        self.base = KnowledgeBase(self.conn, EngineConfig().knowledge)
+        self.base.ingest_document(
+            title="电影甲资料",
+            content=graph_content(),
+            classify=fake_classify(
+                title="电影甲资料",
+                entities=["电影甲", "导演乙"],
+                relations=[["电影甲", "导演乙", "执导"]],
+            ),
+        )
+
+        def generate(prompt):
+            if "主题综述" in prompt:
+                return fake_summary_reply("板块综述", title="电影板块")
+            return fake_summary_reply("电影甲综合概述", ["要点一"])
+
+        self.base.consolidate(generate)
+
+    def test_export_writes_snapshots(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        updated = self.base.export_snapshots(Path(tmp.name))
+        names = {path.name for path in updated}
+        self.assertIn("实体档案.md", names)
+        self.assertIn("主题综述.md", names)
+        dossier = (Path(tmp.name) / "实体档案.md").read_text(encoding="utf-8")
+        self.assertIn("电影甲", dossier)
+        self.assertIn("电影甲综合概述", dossier)
+        cluster = (Path(tmp.name) / "主题综述.md").read_text(encoding="utf-8")
+        self.assertIn("电影板块", cluster)
+        self.assertIn("板块成员", cluster)
+
+    def test_second_export_skips_unchanged(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.assertTrue(self.base.export_snapshots(Path(tmp.name)))
+        self.assertEqual(self.base.export_snapshots(Path(tmp.name)), [])
+
+    def test_empty_knowledge_base_no_files(self):
+        conn, _ = make_store()
+        base = KnowledgeBase(conn, EngineConfig().knowledge)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.assertEqual(base.export_snapshots(Path(tmp.name)), [])
+
+
 class ContextRenderTests(unittest.TestCase):
     def test_render_knowledge_empty(self):
         self.assertEqual(context._render_knowledge(None), "")
