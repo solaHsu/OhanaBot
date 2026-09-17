@@ -60,6 +60,15 @@ harness:
     deep_think: true
     search: true
     save_documents: true
+
+knowledge:
+  enabled: true # 知识库（GraphRAG-lite）：入库 + 检索注入
+  auto_ingest: true # 调研产物自动分类：知识入库、新闻跳过
+  top_k: 2 # 每次注入知识块上限
+  max_chars: 600 # 注入文本预算（字符）
+  min_matches: 2 # 词法命中词数下限
+  graph_hops: 1 # 实体图扩展跳数（0 = 关闭）
+  inject_summaries: true # 命中实体时优先注入实体档案/主题综述
 ```
 
 `mode` 的语义：`dry_run` 接收白名单事件、完整走判定与生成，但只打草稿不发送；`live` 且 `engine.send_enabled: true` 才真正发送。启动为软校验：缺少身份 / 白名单 / 密钥时仅告警；白名单为空则忽略全部群消息。
@@ -73,6 +82,7 @@ harness:
 5. 切换 `mode: live` 并开启 `engine.send_enabled`，重启后在测试群验证真实收发。
 6. 运行期维护：`manage update`（每会话满 200 条触发记忆压缩，`--dry-run` 可预览）、`manage export`（导出快照）。
 7. 重型任务分流选 `harness.backend: web` 时：先 `pip install playwright` 与 `python -m playwright install chromium`，再 `python -m bot.engine.manage harness-login` 完成一次有头登录；调研产物（Markdown 文档）落在 `runtime/harness/`。
+8. 知识库：`python -m bot.engine.manage knowledge rebuild` 将历史调研资料分类入库（新闻自动跳过，`--dry-run` 预览）；`knowledge consolidate` 生成实体档案与主题综述（整合层，未变化自动跳过）；`knowledge stats` 查看统计。
 
 ## 4. 验收清单
 
@@ -82,7 +92,7 @@ harness:
 | 重复回调 | 同一条消息重复上报只入库一次 |
 | 白名单 | 未授权群的消息被丢弃，不写入记录 |
 | 硬触发 | 被 @ / 引用 / 叫名字进入参与态，3 秒批后生成回复（must_reply 生效） |
-| 兴趣追踪 | 两次类目命中进入关注；关注期内命中会话兴趣集升级为参与，超时回到旁观 |
+| 兴趣追踪 | 两次类目命中进入关注；关注期（默认 15 分钟，可配）内命中会话兴趣集升级为参与，超时回到旁观；另有 0.3% 概率（可配）幸运升级直接进入参与 |
 | 参与衰减 | 12 条消息或 15 分钟无互动后退出参与并重建兴趣集 |
 | 管理指令 | 管理员 `/exit` 立即回到旁观；非管理员无效 |
 | dry-run | 生成草稿但不调用发送接口 |
@@ -94,6 +104,7 @@ harness:
 | 跨会话隔离 | 一个群的消息与画像不出现在其他会话的上下文里 |
 | 链接抓取 | 分享卡片（含随后被 @ 或提及）后正文注入生成；内网 / 非 http(s) 地址被拒绝 |
 | 任务分流 | 需实时信息或复杂调研的请求交给执行后端（cli=dsh headless / web=DeepSeek 网页版）并把结果带回群；依赖缺失或未登录时跳过不报错；web 后端结果同时落成 Markdown 文档 |
+| 知识库 | 调研产物自动分类：知识入库（含实体关系）、新闻跳过；命中话题时上下文注入摘录，实体档案/主题综述优先（不相关不注入）；`manage knowledge rebuild/consolidate/stats` 可用 |
 
 ## 5. 故障处理
 

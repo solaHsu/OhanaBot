@@ -1,7 +1,8 @@
 """发言引擎判定核心：旁观 / 关注 / 参与三态状态机（纯函数、零网络）。
 
 设计依据 analysis/proposals/speaking_engine_v0.1.md（标准）§1–§4：
-- 硬触发 → 参与（必答）；兴趣类目 10 条内再命中 → 关注；关注 2 分钟内命中 → 参与，否则回旁观；
+- 硬触发 → 参与（必答）；兴趣类目 10 条内再命中 → 关注；关注期内（默认 15 分钟，可配）命中 → 参与，否则回旁观；
+- 幸运升级：每条他人消息按 `lucky_engage_probability`（默认 0.003）概率直接升级参与；
 - 参与衰减（12 条消息或 15 分钟无"指向"互动）→ 关注（退出时重建兴趣集）→ 再走关注 → 旁观；
 - /exit 指令直接切旁观。
 
@@ -10,8 +11,10 @@
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Callable
 
 from bot.engine.policy.interests import (
     InterestCategory,
@@ -29,14 +32,15 @@ _MAX_REMEMBERED_TEXTS = 300
 
 @dataclass(frozen=True)
 class PolicyConfig:
-    """默认值与标准 §7 一致，全部可调。"""
+    """默认值与标准 §7 基本一致；关注期按实测放宽（15 分钟），全部可通过 yaml `policy:` 段覆盖。"""
 
     interest_window_messages: int = 10  # 旁观追踪窗口（条）
-    attend_window_minutes: float = 2  # 关注期时长
+    attend_window_minutes: float = 15  # 关注期时长（第三次触发的时限）
     engaged_downshift_messages: int = 12  # 参与衰减：消息数
     engaged_downshift_minutes: float = 15  # 参与衰减：时长
     nearby_touch_seconds: float = 90  # 紧邻接话弱信号窗口
     interest_set_capacity: int = 5  # 会话兴趣集容量
+    lucky_engage_probability: float = 0.003  # 每条他人消息直接升级参与的概率（0 = 关闭）
 
 
 @dataclass(frozen=True)
@@ -68,11 +72,13 @@ class ConversationPolicy:
         categories: list[InterestCategory],
         self_names: list[str] | None = None,
         config: PolicyConfig | None = None,
+        rng: Callable[[], float] | None = None,
     ):
         self.config = config or PolicyConfig()
         self.categories = list(categories)
         self.self_names = [name.strip().lower() for name in (self_names or []) if name.strip()]
         self._category_by_name = {category.name: category for category in self.categories}
+        self._rng = rng or random.random  # 回放测试可注入确定性随机数
 
         self.phase = OBSERVING
         self.interest_set = InterestSet(self.config.interest_set_capacity)
@@ -103,6 +109,11 @@ class ConversationPolicy:
             self._enter_engaged(now)
             self._remember(event.text)
             return Decision(ENGAGED, "generate", True, f"reply:{hard}")
+
+        if self.phase != ENGAGED and self._lucky_engage():
+            self._enter_engaged(now)
+            self._remember(event.text)
+            return Decision(ENGAGED, "generate", False, "engage:lucky")
 
         if self.phase == ENGAGED:
             self._remember(event.text)
@@ -183,6 +194,11 @@ class ConversationPolicy:
         if any(name in lowered for name in self.self_names):
             return "name"
         return None
+
+    def _lucky_engage(self) -> bool:
+        """幸运升级：按概率直接进入参与（硬触发之外的一条保底通道）。"""
+        probability = self.config.lucky_engage_probability
+        return probability > 0 and self._rng() < probability
 
     def _consume_nearby(self, now: datetime) -> bool:
         """紧邻接话：Ohana 发言后的第一条他人消息、间隔 ≤ 窗口。每条他人消息只判定一次。"""

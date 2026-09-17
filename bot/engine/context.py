@@ -44,8 +44,9 @@ def build_reply_prompt(
     recent_limit: int = 30,
     has_images: bool = False,
     pages: list | None = None,
+    knowledge: list | None = None,
 ) -> str:
-    """把 人格 + 记忆 + 最近对话 + 本批消息 拼成一次生成的提示词。"""
+    """把 人格 + 记忆 + 最近对话 + 本批消息 + （可选）知识库摘录 拼成一次生成的提示词。"""
     batch_ids = {message.message_id for message in batch}
     recent_rows = store.list_recent_messages(platform, conversation_id, limit=recent_limit + len(batch))
     recent = [row for row in recent_rows if row["message_id"] not in batch_ids][-recent_limit:]
@@ -61,6 +62,7 @@ def build_reply_prompt(
         .replace("{image_note}", IMAGE_NOTE if has_images else "")
         .replace("{must_note}", MUST_REPLY_NOTE if must_reply else "")
         .replace("{pages}", _render_pages(pages))
+        .replace("{knowledge}", _render_knowledge(knowledge))
     )
 
 
@@ -111,6 +113,18 @@ def _render_pages(pages: list | None) -> str:
         return ""
     blocks = [f"### {url}\n{text}" for url, text in pages]
     return "【对方分享的链接内容】\n" + "\n\n".join(blocks)
+
+
+def _render_knowledge(excerpts: list | None) -> str:
+    """知识库摘录段；无命中返回空串（不占用 token）。"""
+    if not excerpts:
+        return ""
+    blocks = [f"### {item['title']}（{item['date']}）\n{item['text']}" for item in excerpts]
+    return (
+        "【知识库摘录】\n"
+        "（以下内容与当前话题相关时才可作为参考；不相关就完全忽略，也不要提“知识库”这个词）\n\n"
+        + "\n\n".join(blocks)
+    )
 
 
 def _render_logs(store: MemoryStore, platform: str, conversation_id: str) -> str:

@@ -20,6 +20,7 @@
 {image_note}
 {must_note}
 {pages}
+{knowledge}
 
 【输出】只输出一个 json 对象，不要解释、不要多余文字：
 {"action": "reply 或 silence 或 task", "text": "要发送的纯文本；action 为 silence 时留空字符串", "task": "action 为 task 时填任务描述（要查/核实什么、要产出什么），否则留空"}

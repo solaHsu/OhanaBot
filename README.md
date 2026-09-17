@@ -35,7 +35,8 @@ Ohana/
 │       ├── onebot/             # 接入：client / parser / server（签名、chunked）
 │       ├── ingest.py           # 消息入库管道（白名单/去重/昵称历史）
 │       ├── policy/             # 发言判定：三态状态机 + 兴趣集（纯代码）
-│       ├── context.py          # 生成上下文组装（人格 + 记忆 + 对话）
+│       ├── context.py          # 生成上下文组装（人格 + 记忆 + 对话 + 知识库摘录）
+│       ├── knowledge.py        # 知识库：入库分类、BM25+实体图检索、实体档案与主题综述
 │       ├── media.py            # 图片附件取回（多模态生成）
 │       ├── runtime.py          # 判定运行时：批窗口 / 生成 / 发送闸门
 │       ├── llm/                # 模型客户端（DeepSeek）
@@ -73,7 +74,7 @@ Ohana/
 1. 填写 `config/bot.local.yaml`：Ohana 的 QQ 号、允许的群、DeepSeek Key（或对应环境变量）与 OneBot 凭据。
 2. 部署 NapCat 并登录 Ohana 账号：开启 HTTP 服务（端口与配置 `onebot.api_base` 一致），在「网络配置 → HTTP 客户端」添加事件上报指向 `http://127.0.0.1:8080/`，密钥与配置 `event_secret` 保持一致。
 3. 启动：`python -m bot.engine.main`（`mode: dry_run` 只生成草稿；`live` + `engine.send_enabled: true` 才真正发送）。
-4. 记忆管理：`python -m bot.engine.manage init | export | update`（每个会话每满 200 条消息触发记忆压缩；`update --dry-run` 可预览）；重型任务分流用网页版后端（`harness.backend: web`）时先 `python -m bot.engine.manage harness-login` 登录一次。
+4. 记忆管理：`python -m bot.engine.manage init | export | update`（每个会话每满 200 条消息触发记忆压缩；`update --dry-run` 可预览）；重型任务分流用网页版后端（`harness.backend: web`）时先 `python -m bot.engine.manage harness-login` 登录一次；知识库由调研产物自动入库（知识类），可用 `python -m bot.engine.manage knowledge rebuild | consolidate | stats` 维护（`consolidate` 生成实体档案与主题综述）。
 5. 测试：`python -m unittest discover -s tests`。
 
 设计入口见 [docs/README.md](docs/README.md)，实施顺序与验收标准见 [docs/implementation-plan.md](docs/implementation-plan.md)。

@@ -3,9 +3,12 @@
 运行：python -m unittest discover -s tests -v
 """
 
+import tempfile
 import unittest
 from datetime import datetime, timedelta
+from pathlib import Path
 
+from bot.engine.config import load_config
 from bot.engine.policy.interests import (
     InterestCategory,
     InterestSet,
@@ -33,8 +36,13 @@ def msg(text: str, **kwargs) -> MessageEvent:
 
 
 class PolicyTests(unittest.TestCase):
-    def make(self, **config) -> ConversationPolicy:
-        return ConversationPolicy(CATEGORIES, self_names=["ohana"], config=PolicyConfig(**config))
+    def make(self, rng=None, **config) -> ConversationPolicy:
+        return ConversationPolicy(
+            CATEGORIES,
+            self_names=["ohana"],
+            config=PolicyConfig(**config),
+            rng=rng or (lambda: 0.99),  # 默认关闭幸运升级，保证回放确定性
+        )
 
     def test_hard_trigger_mention_enters_engaged(self):
         machine = self.make()
@@ -90,13 +98,64 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(decision.phase, OBSERVING)
 
     def test_attend_timeout_returns_observing(self):
-        machine = self.make()
+        machine = self.make(attend_window_minutes=2)
         machine.on_message(msg("聊 ai"), NOW)
         machine.on_message(msg("agent"), NOW + timedelta(seconds=1))
         self.assertEqual(machine.phase, ATTENTIVE)
         decision = machine.tick(NOW + timedelta(seconds=1, minutes=3))
         self.assertEqual(decision.phase, OBSERVING)
         self.assertEqual(decision.reason, "attend:timeout")
+
+    def test_attend_window_relaxed_to_15_minutes(self):
+        machine = self.make()
+        machine.on_message(msg("聊 ai"), NOW)
+        machine.on_message(msg("agent"), NOW + timedelta(seconds=1))
+        decision = machine.on_message(msg("ai 又来了", sender="p003"), NOW + timedelta(minutes=10))
+        self.assertEqual(decision.phase, ENGAGED)
+        self.assertEqual(decision.reason, "engage:interest")
+
+    def test_attend_default_window_timeout(self):
+        machine = self.make()
+        machine.on_message(msg("聊 ai"), NOW)
+        machine.on_message(msg("agent"), NOW + timedelta(seconds=1))
+        decision = machine.tick(NOW + timedelta(minutes=16))
+        self.assertEqual(decision.phase, OBSERVING)
+        self.assertEqual(decision.reason, "attend:timeout")
+
+    def test_lucky_engage_promotes_directly(self):
+        machine = self.make(rng=lambda: 0.0)
+        decision = machine.on_message(msg("今天天气不错"), NOW)
+        self.assertEqual(decision.phase, ENGAGED)
+        self.assertEqual(decision.action, "generate")
+        self.assertFalse(decision.must_reply)
+        self.assertEqual(decision.reason, "engage:lucky")
+
+    def test_lucky_engage_from_attentive(self):
+        rolls = iter([0.99, 0.99, 0.0])
+        machine = self.make(rng=lambda: next(rolls))
+        machine.on_message(msg("聊 ai"), NOW)
+        machine.on_message(msg("agent"), NOW + timedelta(seconds=1))
+        self.assertEqual(machine.phase, ATTENTIVE)
+        decision = machine.on_message(msg("随便说点什么", sender="p003"), NOW + timedelta(seconds=2))
+        self.assertEqual(decision.phase, ENGAGED)
+        self.assertEqual(decision.reason, "engage:lucky")
+
+    def test_lucky_engage_disabled_by_probability(self):
+        machine = self.make(lucky_engage_probability=0, rng=lambda: 0.0)
+        decision = machine.on_message(msg("今天天气不错"), NOW)
+        self.assertEqual(decision.phase, OBSERVING)
+
+    def test_lucky_roll_miss_keeps_normal_flow(self):
+        machine = self.make(rng=lambda: 0.5)
+        decision = machine.on_message(msg("聊聊 ai"), NOW)
+        self.assertEqual(decision.phase, OBSERVING)
+        self.assertIn("AI", machine.tracking)
+
+    def test_self_message_not_lucky(self):
+        machine = self.make(rng=lambda: 0.0)
+        decision = machine.on_message(msg("大家好", from_ohana=True), NOW)
+        self.assertEqual(decision.phase, OBSERVING)
+        self.assertIsNone(decision.action)
 
     def test_attend_hit_engages(self):
         machine = self.make()
@@ -216,6 +275,31 @@ class InterestsFileTests(unittest.TestCase):
         ai = next(category for category in categories if category.name == "AI")
         self.assertIn("agent", ai.words)
         self.assertEqual(ai.priority, 0)  # md 顺序 = 优先级
+
+
+class PolicyConfigYamlTests(unittest.TestCase):
+    def test_policy_section_overrides(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "c.yaml"
+        path.write_text(
+            "policy:\n  attend_window_minutes: 20\n  lucky_engage_probability: 0\n  interest_window_messages: 6\n",
+            encoding="utf-8",
+        )
+        config = load_config(path).policy
+        self.assertEqual(config.attend_window_minutes, 20.0)
+        self.assertEqual(config.lucky_engage_probability, 0.0)
+        self.assertEqual(config.interest_window_messages, 6)
+        self.assertEqual(config.engaged_downshift_messages, 12)  # 其余保持默认
+
+    def test_policy_defaults(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "c.yaml"
+        path.write_text("policy: {}\n", encoding="utf-8")
+        config = load_config(path).policy
+        self.assertEqual(config.attend_window_minutes, 15.0)
+        self.assertAlmostEqual(config.lucky_engage_probability, 0.003)
 
 
 if __name__ == "__main__":

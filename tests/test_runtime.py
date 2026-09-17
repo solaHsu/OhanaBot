@@ -106,7 +106,9 @@ class RuntimeTests(unittest.TestCase):
             return {"status": "ok", "retcode": 0, "data": {"message_id": "s-1"}}
 
         now = [datetime(2026, 9, 16, 4, 0, tzinfo=timezone.utc)]
-        runtime = EngineRuntime(config, store, generate, send_group, clock=lambda: now[0])
+        runtime = EngineRuntime(
+            config, store, generate, send_group, clock=lambda: now[0], policy_rng=lambda: 0.99
+        )
         return runtime, store, calls, now
 
     def test_hard_trigger_batches_then_drafts_in_dry_run(self):
@@ -192,6 +194,7 @@ class RuntimeTests(unittest.TestCase):
         runtime.harness = FakeHarness()
         payloads = [
             json.dumps({"action": "task", "text": "", "task": "调研 X"}, ensure_ascii=False),
+            json.dumps({"kind": "knowledge", "title": "调研资料"}, ensure_ascii=False),  # 知识入库审核
             json.dumps({"action": "reply", "text": "调研好了捏"}, ensure_ascii=False),
         ]
         runtime.generate = lambda prompt, images=None: payloads.pop(0)
@@ -206,6 +209,8 @@ class RuntimeTests(unittest.TestCase):
             time.sleep(0.02)
         time.sleep(0.05)
         self.assertEqual(calls["sends"], [("group:888888", "调研好了捏")])
+        # 调研结果已自动分类入库（知识类）
+        self.assertEqual(store.conn.execute("SELECT COUNT(*) FROM knowledge_docs").fetchone()[0], 1)
 
     def test_task_action_without_harness_skipped(self):
         runtime, store, calls, now = self._make()
@@ -296,6 +301,8 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(config.harness.web.profile_dir, "runtime/harness/web_profile")
         self.assertEqual(config.llm.reasoning_effort, "none")
         self.assertEqual(config.llm.max_tokens, 4096)
+        self.assertEqual(config.policy.attend_window_minutes, 15.0)
+        self.assertAlmostEqual(config.policy.lucky_engage_probability, 0.003)
         self.assertEqual(config.onebot.self_aliases, ["ohana", "欧哈娜"])
 
 

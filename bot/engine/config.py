@@ -6,12 +6,15 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 import yaml
 
+from bot.engine.policy.machine import PolicyConfig
 from bot.tools.web_harness import WebHarnessOptions
+
+POLICY_FIELD_TYPES = {item.name: item.type for item in fields(PolicyConfig)}
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_CONFIG = REPO_ROOT / "config" / "bot.example.yaml"
@@ -57,6 +60,17 @@ class LLMConfig:
 
 
 @dataclass
+class KnowledgeConfig:
+    enabled: bool = True  # 知识库（GraphRAG-lite）总开关：入库 + 检索注入
+    auto_ingest: bool = True  # 调研任务完成后自动分类入库（仅知识类，新闻不入库）
+    top_k: int = 2  # 每次注入的知识块上限
+    max_chars: int = 600  # 注入文本预算（字符）
+    min_matches: int = 2  # 词法命中词数下限（不足时仅实体图扩展可入选）
+    graph_hops: int = 1  # 实体图扩展跳数（0 = 不做图扩展）
+    inject_summaries: bool = True  # 命中实体时优先注入实体档案/主题综述（需先 consolidate 生成）
+
+
+@dataclass
 class HarnessConfig:
     enabled: bool = False  # 重型任务分流（cli 需 dsh；web 需 playwright）
     backend: str = "cli"  # cli = dsh headless；web = DeepSeek 网页版自动化
@@ -82,6 +96,8 @@ class EngineConfig:
     onebot: OneBotConfig = field(default_factory=OneBotConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     harness: HarnessConfig = field(default_factory=HarnessConfig)
+    knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
+    policy: PolicyConfig = field(default_factory=PolicyConfig)  # 判定参数（yaml `policy:` 可选覆盖）
 
 
 def load_config(path: Path | str | None = None) -> EngineConfig:
@@ -103,6 +119,14 @@ def load_config(path: Path | str | None = None) -> EngineConfig:
     admins_raw = data.get("admins") or onebot_raw.get("allowed_private_users") or []
     llm_raw = data.get("llm") or {}
     harness_raw = data.get("harness") or {}
+    knowledge_raw = data.get("knowledge") or {}
+    policy_raw = data.get("policy") or {}
+    policy_overrides: dict = {}
+    for key, value in policy_raw.items():
+        annotation = POLICY_FIELD_TYPES.get(key)
+        if value is None or annotation is None:
+            continue
+        policy_overrides[key] = float(value) if annotation == "float" else int(value)
     web_raw = harness_raw.get("web") or {}
     selectors_raw = web_raw.get("selectors") or {}
     image_max_dimension_raw = engine_raw.get("image_max_dimension")
@@ -159,4 +183,14 @@ def load_config(path: Path | str | None = None) -> EngineConfig:
                 selectors={str(key): str(value) for key, value in selectors_raw.items()},
             ),
         ),
+        knowledge=KnowledgeConfig(
+            enabled=bool(knowledge_raw.get("enabled", True)),
+            auto_ingest=bool(knowledge_raw.get("auto_ingest", True)),
+            top_k=int(knowledge_raw.get("top_k") or 2),
+            max_chars=int(knowledge_raw.get("max_chars") or 600),
+            min_matches=int(knowledge_raw.get("min_matches") or 2),
+            graph_hops=int(knowledge_raw.get("graph_hops") if knowledge_raw.get("graph_hops") is not None else 1),
+            inject_summaries=bool(knowledge_raw.get("inject_summaries", True)),
+        ),
+        policy=PolicyConfig(**policy_overrides),
     )

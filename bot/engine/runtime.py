@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from dataclasses import dataclass, field
@@ -19,9 +20,10 @@ from typing import Callable
 
 from bot.engine.config import REPO_ROOT, EngineConfig
 from bot.engine.context import build_reply_prompt, load_persona, parse_reply
+from bot.engine.knowledge import KnowledgeBase
 from bot.engine.media import collect_image_data_urls
 from bot.engine.onebot.parser import IncomingMessage
-from bot.engine.policy import ConversationPolicy, MessageEvent, PolicyConfig, load_interests
+from bot.engine.policy import ConversationPolicy, MessageEvent, load_interests
 from bot.engine.storage.db import now_iso
 from bot.engine.storage.memory_store import MemoryStore
 from bot.tools import harness as harness_tool
@@ -65,6 +67,7 @@ class EngineRuntime:
         send_group: Callable[[str, str], dict],
         lock: threading.RLock | None = None,
         clock: Callable[[], datetime] | None = None,
+        policy_rng: Callable[[], float] | None = None,
         self_name: str = "Ohana",
     ):
         self.config = config
@@ -73,6 +76,7 @@ class EngineRuntime:
         self.send_group = send_group
         self.lock = lock or threading.RLock()
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._policy_rng = policy_rng or random.random
         self.self_name = self_name
         self.self_id = str(config.onebot.expected_self_id or "")
         self.admins = set(config.admins) or set(config.onebot.allowed_private_users)
@@ -100,6 +104,9 @@ class EngineRuntime:
                     "Harness 桥接已启用（backend=%s）但当前不可用（cli 需装 dsh；web 需装 playwright）：任务分流将跳过",
                     config.harness.backend,
                 )
+        self.knowledge = KnowledgeBase(store.conn, config.knowledge, lock=self.lock)
+        if config.knowledge.enabled:
+            logger.info("知识库已启用（auto_ingest=%s）", config.knowledge.auto_ingest)
         self._thread: threading.Thread | None = None
 
     # ---------- 生命周期 ----------
@@ -188,7 +195,9 @@ class EngineRuntime:
                     row["text"]
                     for row in self.store.list_names(PLATFORM, conversation_id, self.self_id, "group_nickname")
                 ]
-            policy = ConversationPolicy(self._categories, self_names=names, config=PolicyConfig())
+            policy = ConversationPolicy(
+                self._categories, self_names=names, config=self.config.policy, rng=self._policy_rng
+            )
             conv = ConversationState(conversation_id=conversation_id, policy=policy)
             self._convs[conversation_id] = conv
             logger.info("%s：新建会话判定（称呼候选：%s）", conversation_id, "、".join(names) or "无")
@@ -258,6 +267,7 @@ class EngineRuntime:
             else []
         )
         with self.lock:
+            excerpts = self._knowledge_excerpts(batch)
             prompt = build_reply_prompt(
                 self._soul,
                 self._style,
@@ -268,6 +278,7 @@ class EngineRuntime:
                 must_reply,
                 has_images=bool(images),
                 pages=pages,
+                knowledge=excerpts,
             )
         try:
             content = self.generate(prompt, images=images or None)
@@ -304,6 +315,46 @@ class EngineRuntime:
         thread.start()
         logger.info("%s：任务已交给 Harness 执行（%d 字）：%s", conversation_id, len(task), task[:60])
 
+    def _knowledge_excerpts(self, batch) -> list:
+        """按本批文本检索知识库（失败静默，不影响生成）。"""
+        if not self.knowledge.enabled:
+            return []
+        query = " ".join(message.text for message in batch)[-500:]
+        try:
+            return self.knowledge.search(query)
+        except Exception as exc:
+            logger.warning("知识库检索失败（跳过注入）：%s", exc)
+            return []
+
+    def _ingest_knowledge(self, conversation_id: str, task: str, content: str) -> None:
+        """调研结果自动入库（分类后仅知识类）；失败不影响任务汇报。"""
+        if not (self.knowledge.enabled and self.knowledge.auto_ingest):
+            return
+        try:
+            outcome = self.knowledge.ingest_document(
+                title=task.splitlines()[0][:60] if task else "调研资料",
+                source=task,
+                content=content,
+                classify=self.generate,
+            )
+        except Exception as exc:
+            logger.warning("%s：知识入库异常（忽略）：%s", conversation_id, exc)
+            return
+        status = outcome.get("status")
+        if status == "ingested":
+            logger.info(
+                "%s：知识入库完成（%s，%d 块）",
+                conversation_id,
+                outcome.get("title", ""),
+                outcome.get("chunks", 0),
+            )
+        elif status == "skipped":
+            logger.info("%s：资料判定为新闻，不入知识库", conversation_id)
+        elif status == "duplicate":
+            logger.info("%s：知识库已有同内容资料，跳过", conversation_id)
+        else:
+            logger.warning("%s：知识入库未完成（%s）", conversation_id, status)
+
     def _task_worker(self, conv: ConversationState, prompt: str, task: str) -> None:
         conversation_id = conv.conversation_id
         try:
@@ -313,8 +364,10 @@ class EngineRuntime:
         if not result:
             logger.warning("%s：Harness 任务失败或无输出，本轮结束", conversation_id)
             return
+        full_result = result
         result = result[:4000]
         logger.info("%s：Harness 任务完成（%d 字），生成汇报", conversation_id, len(result))
+        self._ingest_knowledge(conversation_id, task, full_result)
         follow_up = (
             prompt
             + "\n\n【深度执行结果】\n"

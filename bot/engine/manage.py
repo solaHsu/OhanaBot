@@ -5,6 +5,7 @@
     python -m bot.engine.manage export   # 导出全部 Markdown 快照（内容有变化才写）
     python -m bot.engine.manage update   # 对攒满一批消息的会话执行记忆更新（需 DEEPSEEK_API_KEY）
     python -m bot.engine.manage harness-login  # 登录 DeepSeek 网页版并保存登录态（harness.backend=web 用）
+    python -m bot.engine.manage knowledge rebuild  # 扫描 runtime/harness/ 资料重建知识库（自动分类）
 
 设计依据 analysis/proposals/memory_plan_v0.2.md §5/§6：
 数据在 runtime/memory/，bot/memory/conversations/ 下留链接指向对应位置。
@@ -72,6 +73,27 @@ def main(argv: list[str] | None = None) -> int:
     p_login.add_argument("--timeout", type=float, default=300.0, help="等待登录的最长秒数（默认 300）")
     p_login.add_argument("--reset", action="store_true", help="换账号：先备份现有登录态（改名）再重新登录")
 
+    p_knowledge = sub.add_parser("knowledge", help="知识库：rebuild 重建入库 / stats 统计")
+    kn_sub = p_knowledge.add_subparsers(dest="knowledge_command", required=True)
+    p_rebuild = kn_sub.add_parser("rebuild", help="扫描目录内 Markdown 资料重新入库（自动分类）")
+    p_rebuild.add_argument("--config", default="", help="配置文件路径（默认 config/bot.local.yaml）")
+    p_rebuild.add_argument("--workspace", default="runtime/harness", help="资料目录（默认 runtime/harness）")
+    p_rebuild.add_argument("--api-key", default="", help="API Key（默认读环境变量 DEEPSEEK_API_KEY）")
+    p_rebuild.add_argument("--model", default=DEFAULT_MODEL, help=f"模型名（默认 {DEFAULT_MODEL}）")
+    p_rebuild.add_argument("--no-classify", action="store_true", help="跳过分类，全部按知识入库")
+    p_rebuild.add_argument("--dry-run", action="store_true", help="只预览分类结果，不写库")
+    p_stats = kn_sub.add_parser("stats", help="知识库统计与最近入库列表")
+    p_stats.add_argument("--config", default="", help="配置文件路径（默认 config/bot.local.yaml）")
+    p_consolidate = kn_sub.add_parser("consolidate", help="批量生成实体档案与主题综述（整合层；需 DEEPSEEK_API_KEY）")
+    p_consolidate.add_argument("--config", default="", help="配置文件路径（默认 config/bot.local.yaml）")
+    p_consolidate.add_argument("--scope", choices=("all", "entity", "cluster"), default="all", help="只做实体档案或主题综述（默认 all）")
+    p_consolidate.add_argument("--min-chunks", type=int, default=2, help="实体档案至少关联的文本块数（默认 2）")
+    p_consolidate.add_argument("--limit", type=int, default=50, help="本次最多生成的档案/综述数（默认 50）")
+    p_consolidate.add_argument("--max-members", type=int, default=30, help="超过该成员数的板块不生成综述（默认 30）")
+    p_consolidate.add_argument("--api-key", default="", help="API Key（默认读配置或环境变量）")
+    p_consolidate.add_argument("--model", default=DEFAULT_MODEL, help=f"模型名（默认 {DEFAULT_MODEL}）")
+    p_consolidate.add_argument("--dry-run", action="store_true", help="只预览将生成哪些档案/综述，不写库")
+
     args = parser.parse_args(argv)
     if args.command == "init":
         return cmd_init(Path(args.db), Path(args.memory_root))
@@ -79,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_update(args, Path(args.db), Path(args.memory_root))
     if args.command == "harness-login":
         return cmd_harness_login(args)
+    if args.command == "knowledge":
+        return cmd_knowledge(args)
     return cmd_export(Path(args.db), Path(args.memory_root))
 
 
@@ -137,6 +161,140 @@ def cmd_harness_login(args) -> int:
     profile_dir = args.profile_dir or config.harness.web.profile_dir
     chat_url = args.url or config.harness.web.chat_url
     return web_harness.login(profile_dir, chat_url, timeout=args.timeout, reset=args.reset)
+
+
+def cmd_knowledge(args) -> int:
+    """知识库管理：rebuild 重建入库 / stats 统计。"""
+    from bot.engine.config import load_config
+    from bot.engine.knowledge import KnowledgeBase
+
+    try:
+        config = load_config(Path(args.config) if args.config else None)
+    except FileNotFoundError as exc:
+        print(exc)
+        return 2
+    conn = db.connect(config.database)
+    db.migrate(conn)
+    base = KnowledgeBase(conn, config.knowledge)
+
+    if args.knowledge_command == "stats":
+        info = base.stats()
+        print(
+            f"知识库：{info['docs']} 份文档、{info['chunks']} 个文本块、{info['entities']} 个实体、"
+            f"{info['edges']} 条关系、{info['summaries']} 份档案/综述（共 {info['chars']} 字符）"
+        )
+        rows = conn.execute(
+            "SELECT title, created_at FROM knowledge_docs ORDER BY doc_id DESC LIMIT 10"
+        ).fetchall()
+        for row in rows:
+            print(f"  [{row['created_at'][:10]}] {row['title']}")
+        return 0
+
+    if args.knowledge_command == "consolidate":
+        return cmd_knowledge_consolidate(args, base, config)
+
+    return cmd_knowledge_rebuild(args, base, config)
+
+
+def cmd_knowledge_rebuild(args, base, config) -> int:
+    """扫描目录中的 Markdown 资料逐份分类入库（dry-run 只预览分类结果）。"""
+    from bot.engine.knowledge import build_classify_prompt, parse_classification
+
+    workspace = Path(args.workspace)
+    if not workspace.is_absolute():
+        workspace = REPO_ROOT / workspace
+    files = sorted(workspace.glob("*.md"))
+    if not files:
+        print(f"目录下没有 Markdown 资料：{workspace}")
+        return 0
+
+    classify = None
+    if not args.no_classify:
+        client = DeepSeekClient(
+            api_key=args.api_key or config.llm.resolve_api_key() or None, model=args.model
+        )
+        if not client.api_key:
+            print("未配置 DeepSeek API Key：请设置环境变量 DEEPSEEK_API_KEY，或用 --api-key 传入（或用 --no-classify 全部入库）。")
+            return 2
+        classify = client.generate
+    print(f"扫描 {len(files)} 份资料：{workspace}")
+
+    counts = {"ingested": 0, "skipped": 0, "duplicate": 0, "failed": 0}
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        title = _extract_title(text) or path.stem
+        if args.dry_run:
+            if classify is None:
+                print(f"  {path.name} → knowledge（dry-run 未写入）")
+                continue
+            try:
+                meta = parse_classification(classify(build_classify_prompt(title, text)))
+                print(f"  {path.name} → {meta['kind']}（实体 {len(meta['entities'])} 个；dry-run 未写入）")
+            except Exception as exc:
+                print(f"  {path.name} → 分类失败：{exc}")
+            continue
+        outcome = base.ingest_document(
+            title=title,
+            source=str(path),
+            content=text,
+            classify=classify,
+            force_kind="knowledge" if args.no_classify else None,
+        )
+        status = outcome.get("status", "failed")
+        counts[status] = counts.get(status, 0) + 1
+        if status == "ingested":
+            print(f"  {path.name} → 入库（{outcome.get('title')}，{outcome.get('chunks')} 块，{outcome.get('entities')} 实体）")
+        elif status == "skipped":
+            print(f"  {path.name} → 跳过（新闻类）")
+        elif status == "duplicate":
+            print(f"  {path.name} → 跳过（已有同内容）")
+        else:
+            reason = outcome.get("reason", "")
+            print(f"  {path.name} → 失败（{status}{'：' + reason if reason else ''}）")
+    if args.dry_run:
+        print("预览完成（未写入知识库）。")
+        return 0
+    print(
+        f"完成：入库 {counts.get('ingested', 0)}、跳过 {counts.get('skipped', 0) + counts.get('duplicate', 0)}、失败 {counts.get('failed', 0)}"
+    )
+    return 0
+
+
+def _extract_title(text: str) -> str:
+    """取第一行一级标题作资料标题；没有则返回空串。"""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("# "):
+            return line[2:].strip()[:80]
+    return ""
+
+
+def cmd_knowledge_consolidate(args, base, config) -> int:
+    """批量生成实体档案与主题综述（整合层）；来源未变化自动跳过。"""
+    client = DeepSeekClient(
+        api_key=args.api_key or config.llm.resolve_api_key() or None, model=args.model
+    )
+    if not client.api_key:
+        print("未配置 DeepSeek API Key：请设置环境变量 DEEPSEEK_API_KEY，或用 --api-key 传入。")
+        return 2
+    print(
+        f"整合范围：{args.scope}（min_chunks={args.min_chunks}，limit={args.limit}，"
+        f"max_members={args.max_members}{'，dry-run' if args.dry_run else ''}）"
+    )
+    report = base.consolidate(
+        client.generate,
+        scope=args.scope,
+        min_chunks=args.min_chunks,
+        limit=args.limit,
+        max_members=args.max_members,
+        dry_run=args.dry_run,
+        on_step=print,
+    )
+    print(
+        "完成：档案 生成 {entity_done} / 跳过 {entity_skipped} / 失败 {entity_failed}；"
+        "综述 生成 {cluster_done} / 跳过 {cluster_skipped} / 失败 {cluster_failed}".format(**report)
+    )
+    return 0
 
 
 def cmd_update(args, db_path: Path, memory_root: Path) -> int:

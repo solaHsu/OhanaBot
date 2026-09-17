@@ -29,6 +29,10 @@ engine:
   image_max_dimension: 768 # 图片长边上限（超大图自动压缩省 token；0 表示不压缩）
   max_links_per_call: 2 # 每次生成抓取的链接上限（分享卡片正文注入）
 
+policy: # 判定参数（可选；覆盖 bot/engine/policy/machine.py 的默认值）
+  attend_window_minutes: 15 # 关注期时长：第三次触发（兴趣集命中）的时限，超时回旁观
+  lucky_engage_probability: 0.003 # 每条他人消息直接升级参与的概率（0 = 关闭）
+
 llm:
   model: deepseek-flash
   base_url: https://api.deepseek.com
@@ -55,3 +59,12 @@ harness:
     queue_wait_seconds: 120 # 等待其它任务让出浏览器的最长秒数
     save_documents: true # 结果落成 Markdown 文档（workspace 下，供文案引用）
     # selectors: {} # 页面改版时覆盖默认选择器：input / answer / copy / stop
+
+knowledge:
+  enabled: true # 知识库（GraphRAG-lite）：调研产物自动入库 + 按话题检索注入
+  auto_ingest: true # 调研完成后自动分类：知识入库、新闻跳过
+  top_k: 2 # 每次注入的知识块上限
+  max_chars: 600 # 注入文本预算（字符）
+  min_matches: 2 # 词法命中词数下限（不足时仅实体图扩展可入选）
+  graph_hops: 1 # 实体图扩展跳数（0 = 关闭图扩展）
+  inject_summaries: true # 命中实体时优先注入实体档案/主题综述（需先运行 knowledge consolidate）

@@ -13,11 +13,75 @@ from pathlib import Path
 from typing import Iterator
 
 DEFAULT_DB_PATH = Path("runtime/ohana.sqlite3")
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 
 # 增量迁移（目标版本号 → SQL 语句）；新库直接按 schema.sql 建到最新版本。
 MIGRATIONS: dict[int, tuple[str, ...]] = {
     2: ("ALTER TABLE messages ADD COLUMN mentions TEXT NOT NULL DEFAULT '[]'",),
+    3: (
+        """
+        CREATE TABLE IF NOT EXISTS knowledge_docs (
+            doc_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            title        TEXT NOT NULL,
+            source       TEXT NOT NULL DEFAULT '',
+            kind         TEXT NOT NULL DEFAULT 'knowledge',
+            content      TEXT NOT NULL,
+            content_hash TEXT NOT NULL UNIQUE,
+            created_at   TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS knowledge_chunks (
+            chunk_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_id    INTEGER NOT NULL REFERENCES knowledge_docs (doc_id) ON DELETE CASCADE,
+            seq       INTEGER NOT NULL,
+            text      TEXT NOT NULL,
+            tokens    TEXT NOT NULL DEFAULT '[]'
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_doc ON knowledge_chunks (doc_id)",
+        """
+        CREATE TABLE IF NOT EXISTS knowledge_entities (
+            entity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name      TEXT NOT NULL,
+            name_key  TEXT NOT NULL UNIQUE
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS knowledge_edges (
+            edge_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            src_id    INTEGER NOT NULL REFERENCES knowledge_entities (entity_id) ON DELETE CASCADE,
+            dst_id    INTEGER NOT NULL REFERENCES knowledge_entities (entity_id) ON DELETE CASCADE,
+            relation  TEXT NOT NULL DEFAULT '',
+            doc_id    INTEGER NOT NULL REFERENCES knowledge_docs (doc_id) ON DELETE CASCADE,
+            UNIQUE (src_id, dst_id, relation, doc_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_edges_src ON knowledge_edges (src_id)",
+        """
+        CREATE TABLE IF NOT EXISTS knowledge_chunk_entities (
+            chunk_id  INTEGER NOT NULL REFERENCES knowledge_chunks (chunk_id) ON DELETE CASCADE,
+            entity_id INTEGER NOT NULL REFERENCES knowledge_entities (entity_id) ON DELETE CASCADE,
+            PRIMARY KEY (chunk_id, entity_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_entities_entity ON knowledge_chunk_entities (entity_id)",
+    ),
+    4: (
+        """
+        CREATE TABLE IF NOT EXISTS knowledge_summaries (
+            summary_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope      TEXT NOT NULL,
+            target_key TEXT NOT NULL,
+            title      TEXT NOT NULL,
+            text       TEXT NOT NULL,
+            members    TEXT NOT NULL DEFAULT '[]',
+            digest     TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            UNIQUE (scope, target_key)
+        )
+        """,
+    ),
 }
 
 
