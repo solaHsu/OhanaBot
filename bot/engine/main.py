@@ -84,6 +84,8 @@ def main(argv: list[str] | None = None) -> int:
         api_key=config.llm.resolve_api_key() or None,
         model=config.llm.model,
         base_url=config.llm.base_url,
+        max_tokens=config.llm.max_tokens,
+        reasoning_effort=config.llm.reasoning_effort,
     )
     if not llm.api_key:
         logger.warning(

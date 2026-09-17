@@ -72,7 +72,9 @@
 - 发送成功（`status=ok` 且 `retcode=0`）后：自消息写入 `messages`，并刷新参与计时。
 - 发送结果未知（超时 / 连接中断）：冻结该会话，禁止自动重发，人工核对后重启恢复。
 - 一次事件只发一条纯文本消息，不构造可执行消息段。
-- 重型任务分流：模型可返回 `action: "task"` + `task`（需实时信息、联网核实或多步任务的场景），由 `bot/tools/harness.py` 在后台线程调用 `dsh --profile headless` 执行（dsh 内置联网搜索与网页抓取，超时默认 240 秒），完成后基于结果再生成一条汇报；同一会话同时只跑一个任务，未启用或失败时跳过；任务工作目录为 `harness.workspace`（默认 `runtime/harness/`），产物统一落在该目录。
+- 重型任务分流：模型可返回 `action: "task"` + `task`（需实时信息、联网核实或多步调研的场景），由 `bot/tools/harness.py` 在后台线程执行，完成后基于结果再生成一条汇报；同一会话同时只跑一个任务，未启用或失败时跳过；任务工作目录为 `harness.workspace`（默认 `runtime/harness/`），产物统一落在该目录。执行后端按 `harness.backend` 选择（接口一致，引擎无感知）：
+  - `cli`（默认）：子进程调用 `dsh --profile headless`（dsh 内置联网搜索与网页抓取，超时默认 240 秒，需安装 dsh）；
+  - `web`：`bot/tools/web_harness.py` 用 Playwright 自动化 DeepSeek 网页版（深度思考 + 智能搜索，零 API token）；取回答优先点网页版「复制」按钮拿 Markdown 源文（保留标题/表格/列表，失败退回纯文本）；登录态存于 `harness.web.profile_dir`（首次 `manage harness-login`）；调研结果同时落成 Markdown 文档（`web-时间-任务.md`）供文案引用；同一进程内任务串行，未登录或依赖缺失时跳过。
 
 ## 7. 运行与配置
 
@@ -81,6 +83,7 @@ python -m bot.engine.main
 ```
 
 - 配置文件：`config/bot.local.yaml`（模板 `config/bot.example.yaml`），包含白名单群、批窗口与限额、模型与密钥、OneBot 凭据。
+- 重型任务分流（`harness.backend: web`）首次使用先运行 `python -m bot.engine.manage harness-login` 完成网页版登录（有头窗口扫码；登录态保存在 `harness.web.profile_dir`，过期后重跑即可）；换账号用 `manage harness-login --reset`（旧登录态自动改名为时间戳备份，需要时改名回切）。
 - 日志不记录密钥与聊天正文；判定与发送行为记录原因码（如 `reply:mention`、`decay:engaged`、`exit:command`）。
 
 ## 8. 当前边界

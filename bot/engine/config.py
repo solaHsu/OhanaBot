@@ -11,6 +11,8 @@ from pathlib import Path
 
 import yaml
 
+from bot.tools.web_harness import WebHarnessOptions
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_CONFIG = REPO_ROOT / "config" / "bot.example.yaml"
 LOCAL_CONFIG = REPO_ROOT / "config" / "bot.local.yaml"
@@ -46,6 +48,8 @@ class LLMConfig:
     base_url: str = "https://api.deepseek.com"
     api_key: str = ""  # 直接值（仅建议填在不提交的本地文件）
     api_key_env: str = "DEEPSEEK_API_KEY"
+    reasoning_effort: str = "none"  # none=关闭思考（省钱防截断）；minimal/high 等档位开启
+    max_tokens: int = 4096  # 输出上限（思考 token 也计入）
 
     def resolve_api_key(self) -> str:
         """API Key：本地直接值优先，否则按变量名查环境变量。"""
@@ -54,11 +58,13 @@ class LLMConfig:
 
 @dataclass
 class HarnessConfig:
-    enabled: bool = False  # 重型任务分流到 dsh headless（需先安装 dsh）
-    command: str = "dsh"
+    enabled: bool = False  # 重型任务分流（cli 需 dsh；web 需 playwright）
+    backend: str = "cli"  # cli = dsh headless；web = DeepSeek 网页版自动化
+    command: str = "dsh"  # 仅 cli 用
     timeout_seconds: float = 240.0
-    model: str = ""  # 留空则用 dsh 默认模型
+    model: str = ""  # 仅 cli 用；留空则用 dsh 默认模型
     workspace: str = "runtime/harness"  # 任务工作目录（相对仓库根；产物统一落此）
+    web: WebHarnessOptions = field(default_factory=WebHarnessOptions)  # 仅 web 用
 
 
 @dataclass
@@ -97,6 +103,8 @@ def load_config(path: Path | str | None = None) -> EngineConfig:
     admins_raw = data.get("admins") or onebot_raw.get("allowed_private_users") or []
     llm_raw = data.get("llm") or {}
     harness_raw = data.get("harness") or {}
+    web_raw = harness_raw.get("web") or {}
+    selectors_raw = web_raw.get("selectors") or {}
     image_max_dimension_raw = engine_raw.get("image_max_dimension")
     return EngineConfig(
         mode=str(data.get("mode") or "dry_run"),
@@ -128,12 +136,27 @@ def load_config(path: Path | str | None = None) -> EngineConfig:
             base_url=str(llm_raw.get("base_url") or "https://api.deepseek.com"),
             api_key=str(llm_raw.get("api_key") or ""),
             api_key_env=str(llm_raw.get("api_key_env") or "DEEPSEEK_API_KEY"),
+            reasoning_effort=str(llm_raw.get("reasoning_effort") or "none"),
+            max_tokens=int(llm_raw.get("max_tokens") or 4096),
         ),
         harness=HarnessConfig(
             enabled=bool(harness_raw.get("enabled", False)),
+            backend=str(harness_raw.get("backend") or "cli"),
             command=str(harness_raw.get("command") or "dsh"),
             timeout_seconds=float(harness_raw.get("timeout_seconds") or 240.0),
             model=str(harness_raw.get("model") or ""),
             workspace=str(harness_raw.get("workspace") or "runtime/harness"),
+            web=WebHarnessOptions(
+                profile_dir=str(web_raw.get("profile_dir") or "runtime/harness/web_profile"),
+                chat_url=str(web_raw.get("chat_url") or "https://chat.deepseek.com/"),
+                headless=bool(web_raw.get("headless", True)),
+                deep_think=bool(web_raw.get("deep_think", True)),
+                search=bool(web_raw.get("search", True)),
+                new_chat=bool(web_raw.get("new_chat", True)),
+                stable_seconds=float(web_raw.get("stable_seconds") or 5.0),
+                queue_wait_seconds=float(web_raw.get("queue_wait_seconds") or 120.0),
+                save_documents=bool(web_raw.get("save_documents", True)),
+                selectors={str(key): str(value) for key, value in selectors_raw.items()},
+            ),
         ),
     )

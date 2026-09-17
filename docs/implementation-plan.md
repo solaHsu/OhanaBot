@@ -44,13 +44,22 @@ llm:
   base_url: https://api.deepseek.com
   api_key: ""
   api_key_env: DEEPSEEK_API_KEY
+  reasoning_effort: high # 思考档位 none/minimal/low/medium/high（思考 token 计入 max_tokens，实测 high 约 1200）
+  max_tokens: 8192 # 上限须覆盖思考 token + 回复正文（仅作保护，不实际扣费）
 
 harness:
-  enabled: false # 重型任务分流到 DeepSeek Harness（需先安装 dsh）
-  command: dsh
+  enabled: false # 重型任务分流（action=task）
+  backend: cli # cli = dsh headless；web = DeepSeek 网页版自动化（Playwright）
+  command: dsh # 仅 cli
   timeout_seconds: 240
-  model: ""
+  model: "" # 仅 cli
   workspace: runtime/harness
+  web: # 仅 web：首次先运行 manage harness-login 完成网页版登录
+    profile_dir: runtime/harness/web_profile
+    headless: true
+    deep_think: true
+    search: true
+    save_documents: true
 ```
 
 `mode` 的语义：`dry_run` 接收白名单事件、完整走判定与生成，但只打草稿不发送；`live` 且 `engine.send_enabled: true` 才真正发送。启动为软校验：缺少身份 / 白名单 / 密钥时仅告警；白名单为空则忽略全部群消息。
@@ -63,6 +72,7 @@ harness:
 4. 以 `mode: dry_run` 启动 `python -m bot.engine.main`，发测试消息，确认入库日志与草稿输出正常。
 5. 切换 `mode: live` 并开启 `engine.send_enabled`，重启后在测试群验证真实收发。
 6. 运行期维护：`manage update`（每会话满 200 条触发记忆压缩，`--dry-run` 可预览）、`manage export`（导出快照）。
+7. 重型任务分流选 `harness.backend: web` 时：先 `pip install playwright` 与 `python -m playwright install chromium`，再 `python -m bot.engine.manage harness-login` 完成一次有头登录；调研产物（Markdown 文档）落在 `runtime/harness/`。
 
 ## 4. 验收清单
 
@@ -83,10 +93,10 @@ harness:
 | 快照 | `manage export` 只输出有变化的 Markdown 文件 |
 | 跨会话隔离 | 一个群的消息与画像不出现在其他会话的上下文里 |
 | 链接抓取 | 分享卡片（含随后被 @ 或提及）后正文注入生成；内网 / 非 http(s) 地址被拒绝 |
-| 任务分流 | 需实时信息或复杂的请求交给 dsh headless（联网搜索 + 深度执行）并把结果带回群；未装 dsh 时跳过不报错 |
+| 任务分流 | 需实时信息或复杂调研的请求交给执行后端（cli=dsh headless / web=DeepSeek 网页版）并把结果带回群；依赖缺失或未登录时跳过不报错；web 后端结果同时落成 Markdown 文档 |
 
 ## 5. 故障处理
 
-- 生成失败 / 输出解析失败：跳过本批并记录日志，不影响后续消息。
+- 生成失败 / 输出解析失败：跳过本批并记录日志，不影响后续消息。输出截断（`finish_reason=length`）说明思考 token 挤占了 `llm.max_tokens` 配额：调大 `llm.max_tokens`（参考 8192）或降低 `llm.reasoning_effort`。
 - 发送结果未知：会话冻结，人工核对平台记录后重启恢复，不得直接重发。
 - 紧急停止：把 `engine.send_enabled` 改回 `false` 并重启（发送前检查立即生效）；已发出的 HTTP 请求不能撤销。

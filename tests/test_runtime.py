@@ -289,9 +289,13 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(config.image_max_dimension, 768)
         self.assertEqual(config.max_links_per_call, 2)
         self.assertFalse(config.harness.enabled)
+        self.assertEqual(config.harness.backend, "cli")
         self.assertEqual(config.harness.command, "dsh")
         self.assertEqual(config.harness.timeout_seconds, 240.0)
         self.assertEqual(config.harness.workspace, "runtime/harness")
+        self.assertEqual(config.harness.web.profile_dir, "runtime/harness/web_profile")
+        self.assertEqual(config.llm.reasoning_effort, "none")
+        self.assertEqual(config.llm.max_tokens, 4096)
         self.assertEqual(config.onebot.self_aliases, ["ohana", "欧哈娜"])
 
 

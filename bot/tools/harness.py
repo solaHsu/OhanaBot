@@ -1,9 +1,11 @@
-"""DeepSeek Harness 桥接：把重型任务分流给 dsh headless 执行。
+"""任务分流桥接：把重型任务交给后台执行器（设计见 docs/engine-spec.md §6）。
 
-- `run_task(task)` 子进程调用 `dsh --profile headless "<任务>"`：stdout 为最终回答、
-  stderr 为推理流（丢弃）；超时或失败返回 None；
-- 由引擎在模型返回 action=task 时调用；未启用时一切照旧；
-- Windows 下自动处理 .cmd 包装与 %APPDATA%\\npm 回退路径。
+- `HarnessBridge`：子进程调用 `dsh --profile headless "<任务>"`：stdout 为最终回答、
+  stderr 为推理流（丢弃）；超时或失败返回 None；Windows 下自动处理 .cmd 包装与
+  %APPDATA%\\npm 回退路径；
+- `create_bridge`：按 `harness.backend` 选实现（cli = 本文件；web = `bot/tools/web_harness.py`），
+  两个实现接口一致（enabled / available / run_task）；
+- 由引擎在模型返回 action=task 时调用；未启用时一切照旧。
 """
 
 from __future__ import annotations
@@ -107,6 +109,35 @@ class HarnessBridge:
             if fallback.is_file():
                 return str(fallback)
         return None
+
+
+def create_bridge(
+    *,
+    enabled: bool,
+    backend: str = "cli",
+    command: str = "dsh",
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    api_key: str = "",
+    model: str = "",
+    workspace: str = "",
+    web_options=None,
+):
+    """按 harness.backend 选择桥接实现：cli = dsh headless；web = DeepSeek 网页版自动化。
+
+    两个实现接口一致（enabled / available / run_task），引擎侧无感知。
+    """
+    if str(backend or "cli").strip().lower() == "web":
+        from bot.tools.web_harness import WebHarnessBridge
+
+        return WebHarnessBridge(enabled=enabled, timeout=timeout, workspace=workspace, options=web_options)
+    return HarnessBridge(
+        enabled=enabled,
+        command=command,
+        timeout=timeout,
+        api_key=api_key,
+        model=model,
+        workspace=workspace,
+    )
 
 
 def _kill_tree(process: subprocess.Popen) -> None:

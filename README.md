@@ -27,7 +27,7 @@ Ohana/
 │   │   ├── style.md            # 语言风格提示词（风格基线）
 │   │   ├── interests.md        # 兴趣词表（发言引擎用，所有者维护）
 │   │   └── conversations/      # 记忆快照链接（指向 runtime/memory/）
-│   ├── tools/                  # 工具集：web.py 抓取、harness.py 任务桥接（dsh 联网）
+│   ├── tools/                  # 工具集：web.py 抓取、harness.py / web_harness.py 任务桥接（dsh 或 DeepSeek 网页版）
 │   └── engine/                 # 发言引擎与记忆系统
 │       ├── main.py             # 入口：事件服务 + 判定运行时
 │       ├── manage.py           # 管理命令：init / export / update
@@ -55,7 +55,7 @@ Ohana/
 
 预处理与抽样覆盖聊天导出与博客的归一化、脱敏、统计、分层抽样与逐成员观察。
 
-1. 安装依赖：Python 3.11+，`pip install pyyaml jieba pillow`（pillow 用于图片压缩，未安装则按原图发送）。
+1. 安装依赖：Python 3.11+，`pip install pyyaml jieba pillow`（pillow 用于图片压缩，未安装则按原图发送）；重型任务分流用网页版后端时另装 `pip install playwright` 并运行 `python -m playwright install chromium`。
 2. 复制 `config/analysis.example.yaml` 为 `config/analysis.local.yaml`，填写本地来源、
    机器人排除名单与候选参考成员（该文件不提交）。
 3. 运行：
@@ -73,7 +73,7 @@ Ohana/
 1. 填写 `config/bot.local.yaml`：Ohana 的 QQ 号、允许的群、DeepSeek Key（或对应环境变量）与 OneBot 凭据。
 2. 部署 NapCat 并登录 Ohana 账号：开启 HTTP 服务（端口与配置 `onebot.api_base` 一致），在「网络配置 → HTTP 客户端」添加事件上报指向 `http://127.0.0.1:8080/`，密钥与配置 `event_secret` 保持一致。
 3. 启动：`python -m bot.engine.main`（`mode: dry_run` 只生成草稿；`live` + `engine.send_enabled: true` 才真正发送）。
-4. 记忆管理：`python -m bot.engine.manage init | export | update`（每个会话每满 200 条消息触发记忆压缩；`update --dry-run` 可预览）。
+4. 记忆管理：`python -m bot.engine.manage init | export | update`（每个会话每满 200 条消息触发记忆压缩；`update --dry-run` 可预览）；重型任务分流用网页版后端（`harness.backend: web`）时先 `python -m bot.engine.manage harness-login` 登录一次。
 5. 测试：`python -m unittest discover -s tests`。
 
 设计入口见 [docs/README.md](docs/README.md)，实施顺序与验收标准见 [docs/implementation-plan.md](docs/implementation-plan.md)。

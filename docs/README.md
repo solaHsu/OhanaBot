@@ -29,8 +29,8 @@
 | 人格与风格基线 | `bot/memory/soul.md`、`bot/memory/style.md` |
 | 兴趣词表 | `bot/memory/interests.md` |
 | 网页抓取 | `bot/tools/web.py` |
-| 重度任务桥接 | `bot/tools/harness.py`（dsh headless，含联网搜索；产物在 runtime/harness/） |
+| 重度任务桥接 | `bot/tools/harness.py`（cli=dsh headless）与 `bot/tools/web_harness.py`（web=DeepSeek 网页版）；产物在 runtime/harness/ |
 | 引擎入口 | `python -m bot.engine.main`（配置 `config/bot.local.yaml`） |
-| 管理命令 | `python -m bot.engine.manage init / export / update` |
+| 管理命令 | `python -m bot.engine.manage init / export / update / harness-login` |
 | 权威数据与快照 | `runtime/ohana.sqlite3`、`runtime/memory/` |
 | 测试 | `python -m unittest discover -s tests` |

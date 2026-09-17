@@ -34,10 +34,24 @@ llm:
   base_url: https://api.deepseek.com
   api_key: "" # 可选：直接填 Key（仅限不提交的本地文件）
   api_key_env: DEEPSEEK_API_KEY # 或把 Key 放这个环境变量里
+  reasoning_effort: high # 思考档位：none/minimal/low/medium/high；质量优先用 high，赶速度用 minimal
+  max_tokens: 8192 # 输出上限，必须覆盖思考 token + 回复正文（仅作保护，不实际扣费）
 
 harness:
-  enabled: false # 重型任务分流到 DeepSeek Harness（action=task；需先安装 dsh）
-  command: dsh # dsh 命令（不在 PATH 时可填全路径）
-  timeout_seconds: 240 # 单个任务超时
-  model: "" # 留空则用 dsh 默认模型
+  enabled: false # 重型任务分流（action=task）
+  backend: cli # cli = dsh headless（需装 dsh）；web = DeepSeek 网页版自动化（需装 playwright）
+  command: dsh # 仅 cli：dsh 命令（不在 PATH 时可填全路径）
+  timeout_seconds: 240 # 单个任务超时（web 后端深度思考+联网会慢些，建议 300~600）
+  model: "" # 仅 cli：留空则用 dsh 默认模型
   workspace: runtime/harness # 任务工作目录（产物统一落此，相对仓库根）
+  web: # 仅 web：首次先运行 python -m bot.engine.manage harness-login（换账号加 --reset）
+    profile_dir: runtime/harness/web_profile # 登录态目录（相对仓库根）
+    chat_url: https://chat.deepseek.com/ # 网页版地址
+    headless: true # 无头运行；有头窗口仅首次登录需要
+    deep_think: true # 发送前尝试打开「深度思考」
+    search: true # 发送前尝试打开「智能搜索（联网）」
+    new_chat: true # 每次任务开新对话
+    stable_seconds: 5 # 输出连续无变化超过该秒数视为完成
+    queue_wait_seconds: 120 # 等待其它任务让出浏览器的最长秒数
+    save_documents: true # 结果落成 Markdown 文档（workspace 下，供文案引用）
+    # selectors: {} # 页面改版时覆盖默认选择器：input / answer / copy / stop

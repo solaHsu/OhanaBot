@@ -1,6 +1,8 @@
 """DeepSeek 模型客户端（OpenAI 兼容接口，JSON 输出模式）。
 
 Key 接口：优先使用构造参数 api_key，其次读环境变量 DEEPSEEK_API_KEY。
+默认关闭思考（reasoning_effort="none"）：思考 token 计入 max_tokens 配额，
+短回复场景既省钱又能避免截断；需要思考时显式传入 high/minimal 等档位。
 文档：https://api-docs.deepseek.com/zh-cn/
 
 用法：
@@ -30,6 +32,7 @@ class DeepSeekClient:
         timeout: float = 120.0,
         max_tokens: int = 4096,
         temperature: float = 1.0,
+        reasoning_effort: str = "none",
     ):
         self.api_key = (api_key or os.environ.get("DEEPSEEK_API_KEY", "")).strip()
         self.model = model
@@ -37,6 +40,7 @@ class DeepSeekClient:
         self.timeout = timeout
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.reasoning_effort = (reasoning_effort or "").strip()  # none=关闭思考；思考 token 计入 max_tokens
 
     def generate(self, prompt: str, images: list[str] | None = None) -> str:
         """调用 chat/completions 并返回文本内容（可附图 data URL；要求 JSON 输出，见提示词模板）。"""
@@ -63,7 +67,10 @@ class DeepSeekClient:
         choice = (data.get("choices") or [{}])[0]
         content = (choice.get("message") or {}).get("content") or ""
         if choice.get("finish_reason") == "length":
-            raise RuntimeError("DeepSeek 输出被 max_tokens 截断，请调大 max_tokens 后重跑")
+            raise RuntimeError(
+                "DeepSeek 输出被 max_tokens 截断（思考 token 也占配额）："
+                "请调大 llm.max_tokens，或把 llm.reasoning_effort 设为 none 关闭思考"
+            )
         if not content.strip():
             raise RuntimeError("DeepSeek 返回了空内容（JSON 模式偶发），请重跑")
         return content
@@ -74,7 +81,7 @@ class DeepSeekClient:
         if images:
             content = [{"type": "text", "text": prompt}]
             content += [{"type": "image_url", "image_url": {"url": url}} for url in images]
-        return {
+        payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": content}],
             "response_format": {"type": "json_object"},
@@ -82,3 +89,6 @@ class DeepSeekClient:
             "temperature": self.temperature,
             "stream": False,
         }
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
+        return payload

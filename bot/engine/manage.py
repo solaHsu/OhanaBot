@@ -4,6 +4,7 @@
     python -m bot.engine.manage init     # 建库、建目录、建 bot/ 链接（可重复执行）
     python -m bot.engine.manage export   # 导出全部 Markdown 快照（内容有变化才写）
     python -m bot.engine.manage update   # 对攒满一批消息的会话执行记忆更新（需 DEEPSEEK_API_KEY）
+    python -m bot.engine.manage harness-login  # 登录 DeepSeek 网页版并保存登录态（harness.backend=web 用）
 
 设计依据 analysis/proposals/memory_plan_v0.2.md §5/§6：
 数据在 runtime/memory/，bot/memory/conversations/ 下留链接指向对应位置。
@@ -62,11 +63,22 @@ def main(argv: list[str] | None = None) -> int:
     p_update.add_argument("--api-key", default="", help="API Key（默认读环境变量 DEEPSEEK_API_KEY）")
     p_update.add_argument("--dry-run", action="store_true", help="只调用模型预览，不写库")
 
+    p_login = sub.add_parser(
+        "harness-login", help="登录 DeepSeek 网页版并保存登录态（harness.backend=web 用）"
+    )
+    p_login.add_argument("--config", default="", help="配置文件路径（默认 config/bot.local.yaml）")
+    p_login.add_argument("--profile-dir", default="", help="登录态目录（默认取配置 harness.web.profile_dir）")
+    p_login.add_argument("--url", default="", help="网页版地址（默认取配置 harness.web.chat_url）")
+    p_login.add_argument("--timeout", type=float, default=300.0, help="等待登录的最长秒数（默认 300）")
+    p_login.add_argument("--reset", action="store_true", help="换账号：先备份现有登录态（改名）再重新登录")
+
     args = parser.parse_args(argv)
     if args.command == "init":
         return cmd_init(Path(args.db), Path(args.memory_root))
     if args.command == "update":
         return cmd_update(args, Path(args.db), Path(args.memory_root))
+    if args.command == "harness-login":
+        return cmd_harness_login(args)
     return cmd_export(Path(args.db), Path(args.memory_root))
 
 
@@ -110,6 +122,21 @@ def cmd_export(db_path: Path, memory_root: Path) -> int:
     for path in updated:
         print(f"  {path}")
     return 0
+
+
+def cmd_harness_login(args) -> int:
+    """有头打开 DeepSeek 网页版完成登录；登录态保存在 harness.web.profile_dir。"""
+    from bot.engine.config import load_config
+    from bot.tools import web_harness
+
+    try:
+        config = load_config(Path(args.config) if args.config else None)
+    except FileNotFoundError as exc:
+        print(exc)
+        return 2
+    profile_dir = args.profile_dir or config.harness.web.profile_dir
+    chat_url = args.url or config.harness.web.chat_url
+    return web_harness.login(profile_dir, chat_url, timeout=args.timeout, reset=args.reset)
 
 
 def cmd_update(args, db_path: Path, memory_root: Path) -> int:

@@ -82,19 +82,24 @@ class EngineRuntime:
         workspace = Path(config.harness.workspace)
         if not workspace.is_absolute():
             workspace = REPO_ROOT / workspace
-        self.harness = harness_tool.HarnessBridge(
+        self.harness = harness_tool.create_bridge(
             enabled=config.harness.enabled,
+            backend=config.harness.backend,
             command=config.harness.command,
             timeout=config.harness.timeout_seconds,
             api_key=config.llm.resolve_api_key(),
             model=config.harness.model or config.llm.model,
             workspace=str(workspace),
+            web_options=config.harness.web,
         )
         if config.harness.enabled:
             if self.harness.available:
-                logger.info("Harness 桥接已启用（命令：%s）", config.harness.command)
+                logger.info("Harness 桥接已启用（backend=%s）", config.harness.backend)
             else:
-                logger.warning("Harness 桥接已启用，但未找到命令 %s：任务分流将跳过", config.harness.command)
+                logger.warning(
+                    "Harness 桥接已启用（backend=%s）但当前不可用（cli 需装 dsh；web 需装 playwright）：任务分流将跳过",
+                    config.harness.backend,
+                )
         self._thread: threading.Thread | None = None
 
     # ---------- 生命周期 ----------
