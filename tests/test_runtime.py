@@ -5,6 +5,7 @@
 
 import json
 import tempfile
+import time
 import unittest
 import itertools
 from datetime import datetime, timedelta, timezone
@@ -64,6 +65,14 @@ class ParseReplyTests(unittest.TestCase):
             parse_reply('{"action": "reply", "text": ""}')
         with self.assertRaises(ValueError):
             parse_reply('{"action": "sing", "text": "啊"}')
+
+    def test_task_action(self):
+        parsed = parse_reply('{"action": "task", "text": "", "task": "调研 X"}')
+        self.assertEqual(parsed["task"], "调研 X")
+
+    def test_task_requires_task_field(self):
+        with self.assertRaises(ValueError):
+            parse_reply('{"action": "task", "text": ""}')
 
 
 class RuntimeTests(unittest.TestCase):
@@ -171,6 +180,67 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(seen_urls, [["https://example.com/card"]])
         self.assertIn("卡片正文内容", calls["prompts"][0])
 
+    def test_task_action_delegated_to_harness(self):
+        class FakeHarness:
+            enabled = True
+            available = True
+
+            def run_task(self, task):
+                return "调研结果正文"
+
+        runtime, store, calls, now = self._make(mode="live", send_enabled=True)
+        runtime.harness = FakeHarness()
+        payloads = [
+            json.dumps({"action": "task", "text": "", "task": "调研 X"}, ensure_ascii=False),
+            json.dumps({"action": "reply", "text": "调研好了捏"}, ensure_ascii=False),
+        ]
+        runtime.generate = lambda prompt, images=None: payloads.pop(0)
+        runtime.handle(make_msg("帮我调研一下 X", mentions_self=True))
+        now[0] += timedelta(seconds=4)
+        runtime.tick()
+        # 等后台任务线程完整结束（发送 + 自消息入库），避免收尾时并发关闭连接
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            if calls["sends"] and store.list_recent_messages("qq", "group:888888"):
+                break
+            time.sleep(0.02)
+        time.sleep(0.05)
+        self.assertEqual(calls["sends"], [("group:888888", "调研好了捏")])
+
+    def test_task_action_without_harness_skipped(self):
+        runtime, store, calls, now = self._make()
+        payloads = [json.dumps({"action": "task", "text": "", "task": "x"})]
+        runtime.generate = lambda prompt, images=None: payloads.pop(0)
+        runtime.handle(make_msg("任务", mentions_self=True))
+        now[0] += timedelta(seconds=4)
+        runtime.tick()
+        time.sleep(0.1)
+        self.assertEqual(calls["sends"], [])  # Harness 未启用 → 跳过
+        self.assertEqual(len(payloads), 0)  # 没有第二次生成
+
+    def test_recent_link_consumed_once(self):
+        from bot.tools import web as web_tools
+
+        seen_urls = []
+        original = web_tools.collect_page_texts
+
+        def fake(urls, limit=2):
+            seen_urls.append(list(urls))
+            return [("https://example.com/card", "卡片正文内容")]
+
+        web_tools.collect_page_texts = fake
+        self.addCleanup(setattr, web_tools, "collect_page_texts", original)
+        runtime, store, calls, now = self._make()
+        runtime.handle(make_msg("分享个卡片", links=("https://example.com/card",)))
+        runtime.handle(make_msg("读一下上面的内容", mentions_self=True))
+        now[0] += timedelta(seconds=4)
+        runtime.tick()
+        # 后续普通消息：链接已被消费，不再重复携带
+        runtime.handle(make_msg("然后就没了", mentions_self=True))
+        now[0] += timedelta(seconds=4)
+        runtime.tick()
+        self.assertEqual(seen_urls, [["https://example.com/card"]])
+
     def test_must_reply_silence_is_skipped(self):
         runtime, store, calls, now = self._make(
             mode="live", send_enabled=True, reply_json='{"action": "silence", "text": ""}'
@@ -218,6 +288,10 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(config.max_images_per_call, 3)
         self.assertEqual(config.image_max_dimension, 768)
         self.assertEqual(config.max_links_per_call, 2)
+        self.assertFalse(config.harness.enabled)
+        self.assertEqual(config.harness.command, "dsh")
+        self.assertEqual(config.harness.timeout_seconds, 240.0)
+        self.assertEqual(config.harness.workspace, "runtime/harness")
         self.assertEqual(config.onebot.self_aliases, ["ohana", "欧哈娜"])
 
 

@@ -53,6 +53,15 @@ class LLMConfig:
 
 
 @dataclass
+class HarnessConfig:
+    enabled: bool = False  # 重型任务分流到 dsh headless（需先安装 dsh）
+    command: str = "dsh"
+    timeout_seconds: float = 240.0
+    model: str = ""  # 留空则用 dsh 默认模型
+    workspace: str = "runtime/harness"  # 任务工作目录（相对仓库根；产物统一落此）
+
+
+@dataclass
 class EngineConfig:
     mode: str = "dry_run"
     database: Path = REPO_ROOT / "runtime" / "ohana.sqlite3"
@@ -66,6 +75,7 @@ class EngineConfig:
     admins: list[str] = field(default_factory=list)  # /exit 等指令的可用账号
     onebot: OneBotConfig = field(default_factory=OneBotConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    harness: HarnessConfig = field(default_factory=HarnessConfig)
 
 
 def load_config(path: Path | str | None = None) -> EngineConfig:
@@ -86,6 +96,7 @@ def load_config(path: Path | str | None = None) -> EngineConfig:
     self_id = onebot_raw.get("expected_self_id")
     admins_raw = data.get("admins") or onebot_raw.get("allowed_private_users") or []
     llm_raw = data.get("llm") or {}
+    harness_raw = data.get("harness") or {}
     image_max_dimension_raw = engine_raw.get("image_max_dimension")
     return EngineConfig(
         mode=str(data.get("mode") or "dry_run"),
@@ -117,5 +128,12 @@ def load_config(path: Path | str | None = None) -> EngineConfig:
             base_url=str(llm_raw.get("base_url") or "https://api.deepseek.com"),
             api_key=str(llm_raw.get("api_key") or ""),
             api_key_env=str(llm_raw.get("api_key_env") or "DEEPSEEK_API_KEY"),
+        ),
+        harness=HarnessConfig(
+            enabled=bool(harness_raw.get("enabled", False)),
+            command=str(harness_raw.get("command") or "dsh"),
+            timeout_seconds=float(harness_raw.get("timeout_seconds") or 240.0),
+            model=str(harness_raw.get("model") or ""),
+            workspace=str(harness_raw.get("workspace") or "runtime/harness"),
         ),
     )

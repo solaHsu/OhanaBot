@@ -44,6 +44,13 @@ llm:
   base_url: https://api.deepseek.com
   api_key: ""
   api_key_env: DEEPSEEK_API_KEY
+
+harness:
+  enabled: false # 重型任务分流到 DeepSeek Harness（需先安装 dsh）
+  command: dsh
+  timeout_seconds: 240
+  model: ""
+  workspace: runtime/harness
 ```
 
 `mode` 的语义：`dry_run` 接收白名单事件、完整走判定与生成，但只打草稿不发送；`live` 且 `engine.send_enabled: true` 才真正发送。启动为软校验：缺少身份 / 白名单 / 密钥时仅告警；白名单为空则忽略全部群消息。
@@ -76,6 +83,7 @@ llm:
 | 快照 | `manage export` 只输出有变化的 Markdown 文件 |
 | 跨会话隔离 | 一个群的消息与画像不出现在其他会话的上下文里 |
 | 链接抓取 | 分享卡片（含随后被 @ 或提及）后正文注入生成；内网 / 非 http(s) 地址被拒绝 |
+| 任务分流 | 需实时信息或复杂的请求交给 dsh headless（联网搜索 + 深度执行）并把结果带回群；未装 dsh 时跳过不报错 |
 
 ## 5. 故障处理
 

@@ -65,7 +65,7 @@ def build_reply_prompt(
 
 
 def parse_reply(content: str) -> dict:
-    """解析模型输出（容忍代码围栏），返回 {"action", "text"}。"""
+    """解析模型输出（容忍代码围栏），返回 {"action", "text"}；action=task 时附 task。"""
     text = _strip_code_fence(content.strip())
     try:
         data = json.loads(text)
@@ -74,12 +74,18 @@ def parse_reply(content: str) -> dict:
     if not isinstance(data, dict):
         raise ValueError("输出不是 json 对象")
     action = str(data.get("action") or "").strip().lower()
-    if action not in ("reply", "silence"):
+    if action not in ("reply", "silence", "task"):
         raise ValueError(f"未知 action：{action!r}")
     reply_text = str(data.get("text") or "").strip()
     if action == "reply" and not reply_text:
         raise ValueError("action=reply 但 text 为空")
-    return {"action": action, "text": reply_text}
+    parsed = {"action": action, "text": reply_text}
+    if action == "task":
+        task = str(data.get("task") or "").strip()
+        if not task:
+            raise ValueError("action=task 但 task 为空")
+        parsed["task"] = task
+    return parsed
 
 
 # ---------- 渲染 ----------

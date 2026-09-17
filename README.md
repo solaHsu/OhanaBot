@@ -27,7 +27,7 @@ Ohana/
 │   │   ├── style.md            # 语言风格提示词（风格基线）
 │   │   ├── interests.md        # 兴趣词表（发言引擎用，所有者维护）
 │   │   └── conversations/      # 记忆快照链接（指向 runtime/memory/）
-│   ├── tools/                  # 工具集：web.py 网页抓取
+│   ├── tools/                  # 工具集：web.py 抓取、harness.py 任务桥接（dsh 联网）
 │   └── engine/                 # 发言引擎与记忆系统
 │       ├── main.py             # 入口：事件服务 + 判定运行时
 │       ├── manage.py           # 管理命令：init / export / update

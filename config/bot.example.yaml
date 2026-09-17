@@ -34,3 +34,10 @@ llm:
   base_url: https://api.deepseek.com
   api_key: "" # 可选：直接填 Key（仅限不提交的本地文件）
   api_key_env: DEEPSEEK_API_KEY # 或把 Key 放这个环境变量里
+
+harness:
+  enabled: false # 重型任务分流到 DeepSeek Harness（action=task；需先安装 dsh）
+  command: dsh # dsh 命令（不在 PATH 时可填全路径）
+  timeout_seconds: 240 # 单个任务超时
+  model: "" # 留空则用 dsh 默认模型
+  workspace: runtime/harness # 任务工作目录（产物统一落此，相对仓库根）

@@ -110,7 +110,7 @@ def fetch_page(
         return None
     cached = _cache_get(url)
     if cached is not None:
-        logger.info("链接命中缓存（%d 字）：%s", len(cached), url)
+        logger.debug("链接命中缓存（%d 字）：%s", len(cached), url)
         return cached
     opener = urllib.request.build_opener(
         _SafeRedirectHandler(allow_private=allow_private, base_host=urllib.parse.urlparse(url).hostname or "")

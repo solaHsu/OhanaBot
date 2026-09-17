@@ -14,15 +14,17 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable
 
-from bot.engine.config import EngineConfig
+from bot.engine.config import REPO_ROOT, EngineConfig
 from bot.engine.context import build_reply_prompt, load_persona, parse_reply
 from bot.engine.media import collect_image_data_urls
 from bot.engine.onebot.parser import IncomingMessage
 from bot.engine.policy import ConversationPolicy, MessageEvent, PolicyConfig, load_interests
 from bot.engine.storage.db import now_iso
 from bot.engine.storage.memory_store import MemoryStore
+from bot.tools import harness as harness_tool
 from bot.tools import web as web_tools
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,7 @@ class ConversationState:
     call_times: list = field(default_factory=list)  # 滚动一小时的调用时间
     frozen: bool = False
     recent_links: list = field(default_factory=list)  # [(url, 出现时间)] 近期卡片链接
+    task_running: bool = False  # 是否有 Harness 任务在执行
 
     def clear_pending(self) -> None:
         self.pending = []
@@ -76,6 +79,22 @@ class EngineRuntime:
         self._convs: dict[str, ConversationState] = {}
         self._categories = load_interests()
         self._soul, self._style = load_persona()
+        workspace = Path(config.harness.workspace)
+        if not workspace.is_absolute():
+            workspace = REPO_ROOT / workspace
+        self.harness = harness_tool.HarnessBridge(
+            enabled=config.harness.enabled,
+            command=config.harness.command,
+            timeout=config.harness.timeout_seconds,
+            api_key=config.llm.resolve_api_key(),
+            model=config.harness.model or config.llm.model,
+            workspace=str(workspace),
+        )
+        if config.harness.enabled:
+            if self.harness.available:
+                logger.info("Harness 桥接已启用（命令：%s）", config.harness.command)
+            else:
+                logger.warning("Harness 桥接已启用，但未找到命令 %s：任务分流将跳过", config.harness.command)
         self._thread: threading.Thread | None = None
 
     # ---------- 生命周期 ----------
@@ -209,12 +228,14 @@ class EngineRuntime:
             image_refs = [ref for message in batch for ref in message.images]
             link_refs = [link for message in batch for link in message.links]
             window = RECENT_LINK_WINDOW_MINUTES * 60
-            conv.recent_links = [
+            fresh_recent = [
                 (url, seen) for url, seen in conv.recent_links if (now - seen).total_seconds() <= window
             ]
-            for url, _seen in conv.recent_links:
+            for url, _seen in fresh_recent:
                 if url not in link_refs:
                     link_refs.append(url)
+            # 消费后移除：近期链接只在“首次被携带”的那一轮生效，避免每条消息重复注入
+            conv.recent_links = [pair for pair in fresh_recent if pair[0] not in link_refs]
         images = (
             collect_image_data_urls(
                 image_refs,
@@ -253,8 +274,65 @@ class EngineRuntime:
         except ValueError as exc:
             logger.warning("%s：输出解析失败：%s", conversation_id, exc)
             return
+        if parsed["action"] == "task":
+            self._start_task(conv, prompt, str(parsed.get("task") or "").strip())
+            return
         with self.lock:
             self._deliver(conv, parsed, must_reply, now)
+
+    def _start_task(self, conv: ConversationState, prompt: str, task: str) -> None:
+        """把重型任务交给 Harness 后台执行，完成后生成汇报。"""
+        conversation_id = conv.conversation_id
+        if not self.harness.enabled or not self.harness.available:
+            logger.info("%s：模型请求深度任务，但 Harness 未启用或不可用，跳过", conversation_id)
+            return
+        if conv.task_running:
+            logger.info("%s：已有任务在执行，跳过新任务", conversation_id)
+            return
+        conv.task_running = True
+        thread = threading.Thread(
+            target=self._task_worker,
+            args=(conv, prompt, task),
+            name=f"harness-{conversation_id}",
+            daemon=True,
+        )
+        thread.start()
+        logger.info("%s：任务已交给 Harness 执行（%d 字）：%s", conversation_id, len(task), task[:60])
+
+    def _task_worker(self, conv: ConversationState, prompt: str, task: str) -> None:
+        conversation_id = conv.conversation_id
+        try:
+            result = self.harness.run_task(task)
+        finally:
+            conv.task_running = False
+        if not result:
+            logger.warning("%s：Harness 任务失败或无输出，本轮结束", conversation_id)
+            return
+        result = result[:4000]
+        logger.info("%s：Harness 任务完成（%d 字），生成汇报", conversation_id, len(result))
+        follow_up = (
+            prompt
+            + "\n\n【深度执行结果】\n"
+            + result
+            + "\n\n请基于以上结果，用你的风格给群里回一条消息（仍然只输出 json，action 只能 reply 或 silence）。"
+        )
+        with self.lock:
+            conv.call_times.append(self._clock())
+        try:
+            content = self.generate(follow_up)
+        except Exception as exc:
+            logger.warning("%s：任务汇报生成失败：%s", conversation_id, exc)
+            return
+        try:
+            final = parse_reply(content)
+        except ValueError as exc:
+            logger.warning("%s：任务汇报解析失败：%s", conversation_id, exc)
+            return
+        if final["action"] != "reply":
+            logger.info("%s：任务完成但模型选择不发言", conversation_id)
+            return
+        with self.lock:
+            self._deliver(conv, final, False, self._clock())
 
     def _deliver(self, conv: ConversationState, parsed: dict, must_reply: bool, now: datetime) -> None:
         conversation_id = conv.conversation_id

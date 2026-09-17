@@ -61,6 +61,7 @@ bot/
     conversations/          # 指向 runtime/memory/ 的目录链接
   tools/
     web.py                  # 网页抓取（链接正文注入生成上下文）
+    harness.py              # 重度任务桥接（action=task 时调用 dsh headless，含联网搜索）
   engine/
     main.py                 # 入口：配置装配、事件服务、判定运行时
     manage.py               # 管理命令：init / export / update
