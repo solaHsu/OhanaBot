@@ -45,13 +45,19 @@ def build_reply_prompt(
     has_images: bool = False,
     pages: list | None = None,
     knowledge: list | None = None,
+    exclude_user_ids: tuple[str, ...] = (),
 ) -> str:
     """把 人格 + 记忆 + 最近对话 + 本批消息 + （可选）知识库摘录 拼成一次生成的提示词。"""
     batch_ids = {message.message_id for message in batch}
     recent_rows = store.list_recent_messages(platform, conversation_id, limit=recent_limit + len(batch))
     recent = [row for row in recent_rows if row["message_id"] not in batch_ids][-recent_limit:]
 
-    user_ids = list(dict.fromkeys(message.user_id for message in batch))
+    excluded = set(exclude_user_ids)
+    user_ids = [
+        user_id
+        for user_id in dict.fromkeys(message.user_id for message in batch)
+        if user_id not in excluded
+    ]
     return (
         PROMPT_TEMPLATE.replace("{soul}", soul)
         .replace("{style}", style)

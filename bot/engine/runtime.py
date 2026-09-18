@@ -13,7 +13,7 @@ import logging
 import random
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -268,6 +268,13 @@ class EngineRuntime:
         )
         with self.lock:
             excerpts = self._knowledge_excerpts(batch)
+            if excerpts:
+                logger.info(
+                    "%s：知识库注入 %d 块：%s",
+                    conversation_id,
+                    len(excerpts),
+                    "、".join(f"{item['title'][:24]}（{item['score']}）" for item in excerpts),
+                )
             prompt = build_reply_prompt(
                 self._soul,
                 self._style,
@@ -279,6 +286,7 @@ class EngineRuntime:
                 has_images=bool(images),
                 pages=pages,
                 knowledge=excerpts,
+                exclude_user_ids=(self.self_id,) if self.self_id else (),
             )
         try:
             content = self.generate(prompt, images=images or None)
@@ -326,17 +334,52 @@ class EngineRuntime:
             logger.warning("知识库检索失败（跳过注入）：%s", exc)
             return []
 
+    def _web_classify_generator(self):
+        """入库审核走网页版（零 API token）；未启用或不可用时返回 None（回退 API 生成器）。"""
+        if self.knowledge.classify_backend != "web":
+            return None
+        from bot.tools import web_harness
+
+        if not web_harness._playwright_available():
+            logger.warning("网页版入库审核不可用（未安装 playwright），回退 API")
+            return None
+        options = replace(
+            self.config.harness.web,
+            deep_think=False,
+            search=False,
+            new_chat=True,
+            save_documents=False,
+        )
+        driver = web_harness.PlaywrightWebChat(options)
+        timeout = self.config.harness.timeout_seconds
+
+        def generate(prompt: str) -> str:
+            return driver.ask(prompt, timeout=timeout)
+
+        return generate
+
     def _ingest_knowledge(self, conversation_id: str, task: str, content: str) -> None:
-        """调研结果自动入库（分类后仅知识类）；失败不影响任务汇报。"""
+        """调研结果自动入库（分类后仅知识类）；失败不影响任务汇报。
+
+        审核默认走网页版（knowledge.classify_backend）；网页版失败时回退 API 重试一次，
+        避免因登录态等问题丢掉知识。
+        """
         if not (self.knowledge.enabled and self.knowledge.auto_ingest):
             return
+        title = task.splitlines()[0][:60] if task else "调研资料"
+        classify = self.generate
+        web_generate = self._web_classify_generator()
+        if web_generate is not None:
+            classify = web_generate
         try:
             outcome = self.knowledge.ingest_document(
-                title=task.splitlines()[0][:60] if task else "调研资料",
-                source=task,
-                content=content,
-                classify=self.generate,
+                title=title, source=task, content=content, classify=classify
             )
+            if outcome.get("status") == "failed" and classify is not self.generate:
+                logger.warning("%s：网页版入库审核失败，回退 API 重试", conversation_id)
+                outcome = self.knowledge.ingest_document(
+                    title=title, source=task, content=content, classify=self.generate
+                )
         except Exception as exc:
             logger.warning("%s：知识入库异常（忽略）：%s", conversation_id, exc)
             return
@@ -367,30 +410,33 @@ class EngineRuntime:
         full_result = result
         result = result[:4000]
         logger.info("%s：Harness 任务完成（%d 字），生成汇报", conversation_id, len(result))
-        self._ingest_knowledge(conversation_id, task, full_result)
-        follow_up = (
-            prompt
-            + "\n\n【深度执行结果】\n"
-            + result
-            + "\n\n请基于以上结果，用你的风格给群里回一条消息（仍然只输出 json，action 只能 reply 或 silence）。"
-        )
-        with self.lock:
-            conv.call_times.append(self._clock())
         try:
-            content = self.generate(follow_up)
-        except Exception as exc:
-            logger.warning("%s：任务汇报生成失败：%s", conversation_id, exc)
-            return
-        try:
-            final = parse_reply(content)
-        except ValueError as exc:
-            logger.warning("%s：任务汇报解析失败：%s", conversation_id, exc)
-            return
-        if final["action"] != "reply":
-            logger.info("%s：任务完成但模型选择不发言", conversation_id)
-            return
-        with self.lock:
-            self._deliver(conv, final, False, self._clock())
+            follow_up = (
+                prompt
+                + "\n\n【深度执行结果】\n"
+                + result
+                + "\n\n请基于以上结果，用你的风格给群里回一条消息（仍然只输出 json，action 只能 reply 或 silence）。"
+            )
+            with self.lock:
+                conv.call_times.append(self._clock())
+            try:
+                content = self.generate(follow_up)
+            except Exception as exc:
+                logger.warning("%s：任务汇报生成失败：%s", conversation_id, exc)
+                return
+            try:
+                final = parse_reply(content)
+            except ValueError as exc:
+                logger.warning("%s：任务汇报解析失败：%s", conversation_id, exc)
+                return
+            if final["action"] != "reply":
+                logger.info("%s：任务完成但模型选择不发言", conversation_id)
+                return
+            with self.lock:
+                self._deliver(conv, final, False, self._clock())
+        finally:
+            # 汇报先发；入库在后（网页版审核较慢，不影响群回复）
+            self._ingest_knowledge(conversation_id, task, full_result)
 
     def _deliver(self, conv: ConversationState, parsed: dict, must_reply: bool, now: datetime) -> None:
         conversation_id = conv.conversation_id

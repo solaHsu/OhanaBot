@@ -18,6 +18,7 @@ import os
 import stat
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from bot.engine.growth import snapshot
@@ -81,6 +82,8 @@ def main(argv: list[str] | None = None) -> int:
     p_rebuild.add_argument("--api-key", default="", help="API Key（默认读环境变量 DEEPSEEK_API_KEY）")
     p_rebuild.add_argument("--model", default=DEFAULT_MODEL, help=f"模型名（默认 {DEFAULT_MODEL}）")
     p_rebuild.add_argument("--no-classify", action="store_true", help="跳过分类，全部按知识入库")
+    p_rebuild.add_argument("--backend", choices=("", "api", "web"), default="", help="审核后端（默认取配置 knowledge.classify_backend）")
+    p_rebuild.add_argument("--limit", type=int, default=0, help="只处理前 N 份（0 = 全部）")
     p_rebuild.add_argument("--dry-run", action="store_true", help="只预览分类结果，不写库")
     p_stats = kn_sub.add_parser("stats", help="知识库统计与最近入库列表")
     p_stats.add_argument("--config", default="", help="配置文件路径（默认 config/bot.local.yaml）")
@@ -92,10 +95,17 @@ def main(argv: list[str] | None = None) -> int:
     p_consolidate.add_argument("--max-members", type=int, default=30, help="超过该成员数的板块不生成综述（默认 30）")
     p_consolidate.add_argument("--api-key", default="", help="API Key（默认读配置或环境变量）")
     p_consolidate.add_argument("--model", default=DEFAULT_MODEL, help=f"模型名（默认 {DEFAULT_MODEL}）")
+    p_consolidate.add_argument("--backend", choices=("", "api", "web"), default="", help="生成后端（默认取配置 knowledge.consolidate_backend）")
+    p_consolidate.add_argument("--think", action="store_true", help="网页版后端开启深度思考（默认关闭，批量更快）")
+    p_consolidate.add_argument("--force", action="store_true", help="忽略来源签名，强制重新生成")
     p_consolidate.add_argument("--dry-run", action="store_true", help="只预览将生成哪些档案/综述，不写库")
     p_export = kn_sub.add_parser("export", help="导出整合结果 Markdown 快照（默认 runtime/knowledge/）")
     p_export.add_argument("--config", default="", help="配置文件路径（默认 config/bot.local.yaml）")
     p_export.add_argument("--out", default="runtime/knowledge", help="输出目录（相对仓库根；默认 runtime/knowledge）")
+    p_query = kn_sub.add_parser("query", help="试检索：预览某段文本会注入哪些知识摘录")
+    p_query.add_argument("text", help="查询文本（把群里那句话原样放进来）")
+    p_query.add_argument("--config", default="", help="配置文件路径（默认 config/bot.local.yaml）")
+    p_query.add_argument("--limit", type=int, default=0, help="覆盖 top_k（0 = 用配置值）")
 
     args = parser.parse_args(argv)
     if args.command == "init":
@@ -144,7 +154,9 @@ def cmd_export(db_path: Path, memory_root: Path) -> int:
     conn = db.connect(db_path)
     db.migrate(conn)
     store = MemoryStore(conn)
-    updated = snapshot.export_all(store, memory_root)
+    engine_config = _load_engine_config()
+    self_id = str(engine_config.onebot.expected_self_id or "") if engine_config else ""
+    updated = snapshot.export_all(store, memory_root, exclude_user_ids=(self_id,) if self_id else ())
     print(f"导出完成：{len(updated)} 个文件有更新")
     for path in updated:
         print(f"  {path}")
@@ -197,6 +209,8 @@ def cmd_knowledge(args) -> int:
         return cmd_knowledge_consolidate(args, base, config)
     if args.knowledge_command == "export":
         return cmd_knowledge_export(args, base)
+    if args.knowledge_command == "query":
+        return cmd_knowledge_query(args, base)
 
     return cmd_knowledge_rebuild(args, base, config)
 
@@ -209,19 +223,18 @@ def cmd_knowledge_rebuild(args, base, config) -> int:
     if not workspace.is_absolute():
         workspace = REPO_ROOT / workspace
     files = sorted(workspace.glob("*.md"))
+    if args.limit:
+        files = files[: args.limit]
     if not files:
         print(f"目录下没有 Markdown 资料：{workspace}")
         return 0
 
     classify = None
     if not args.no_classify:
-        client = DeepSeekClient(
-            api_key=args.api_key or config.llm.resolve_api_key() or None, model=args.model
-        )
-        if not client.api_key:
-            print("未配置 DeepSeek API Key：请设置环境变量 DEEPSEEK_API_KEY，或用 --api-key 传入（或用 --no-classify 全部入库）。")
+        classify, _backend = _backend_generate(args, config, config.knowledge.classify_backend)
+        if classify is None:
+            print("或用 --no-classify 跳过分类、全部按知识入库。")
             return 2
-        classify = client.generate
     print(f"扫描 {len(files)} 份资料：{workspace}")
 
     counts = {"ingested": 0, "skipped": 0, "duplicate": 0, "failed": 0}
@@ -276,22 +289,23 @@ def _extract_title(text: str) -> str:
 
 def cmd_knowledge_consolidate(args, base, config) -> int:
     """批量生成实体档案与主题综述（整合层）；来源未变化自动跳过。"""
-    client = DeepSeekClient(
-        api_key=args.api_key or config.llm.resolve_api_key() or None, model=args.model
+    generate, backend = _backend_generate(
+        args, config, config.knowledge.consolidate_backend, think=args.think
     )
-    if not client.api_key:
-        print("未配置 DeepSeek API Key：请设置环境变量 DEEPSEEK_API_KEY，或用 --api-key 传入。")
+    if generate is None:
         return 2
     print(
         f"整合范围：{args.scope}（min_chunks={args.min_chunks}，limit={args.limit}，"
-        f"max_members={args.max_members}{'，dry-run' if args.dry_run else ''}）"
+        f"max_members={args.max_members}，backend={backend}"
+        f"{'，force' if args.force else ''}{'，dry-run' if args.dry_run else ''}）"
     )
     report = base.consolidate(
-        client.generate,
+        generate,
         scope=args.scope,
         min_chunks=args.min_chunks,
         limit=args.limit,
         max_members=args.max_members,
+        force=args.force,
         dry_run=args.dry_run,
         on_step=print,
     )
@@ -299,6 +313,57 @@ def cmd_knowledge_consolidate(args, base, config) -> int:
         "完成：档案 生成 {entity_done} / 跳过 {entity_skipped} / 失败 {entity_failed}；"
         "综述 生成 {cluster_done} / 跳过 {cluster_skipped} / 失败 {cluster_failed}".format(**report)
     )
+    return 0
+
+
+def _backend_generate(args, config, configured_backend: str, think: bool = False):
+    """按后端构造生成器；web 不可用时自动回退 API。返回 (generate, 实际后端)，构造失败为 (None, backend)。"""
+    backend = (getattr(args, "backend", "") or configured_backend or "api").strip().lower()
+    if backend == "web":
+        from bot.tools import web_harness
+
+        options = replace(
+            config.harness.web,
+            deep_think=think,
+            search=False,
+            new_chat=True,
+            save_documents=False,
+        )
+        if not web_harness._playwright_available():
+            print("网页版不可用（未安装 playwright），回退到 API 模型。")
+        elif not web_harness.check_login(options.profile_dir, options.chat_url):
+            print(f"网页版未登录或登录态过期（{web_harness.LOGIN_HINT}），回退到 API 模型。")
+        else:
+            print("网页版后端：每份资料开新对话；请与引擎任务错峰运行（共用浏览器登录态）。")
+            driver = web_harness.PlaywrightWebChat(options)
+            timeout = config.harness.timeout_seconds
+
+            def generate(prompt: str) -> str:
+                return driver.ask(prompt, timeout=timeout)
+
+            return generate, "web"
+        backend = "api"
+    client = DeepSeekClient(
+        api_key=args.api_key or config.llm.resolve_api_key() or None, model=args.model
+    )
+    if not client.api_key:
+        print("未配置 DeepSeek API Key：请设置环境变量 DEEPSEEK_API_KEY，或用 --api-key 传入。")
+        return None, backend
+    return client.generate, "api"
+
+
+def cmd_knowledge_query(args, base) -> int:
+    """用给定文本试检索，打印将注入的知识摘录（离线验证用）。"""
+    excerpts = base.search(args.text, limit=args.limit or None)
+    if not excerpts:
+        print("无命中：该话题不会注入知识（聊天侧同样如此）。")
+        return 0
+    total = 0
+    for item in excerpts:
+        total += len(item["text"])
+        print(f"[{item['score']}] {item['title']}（{item['date']}）")
+        print(f"    {item['text'][:150]}")
+    print(f"共 {len(excerpts)} 块、{total} 字（聊天侧同样走这条检索；注入预算 {base.max_chars} 字）")
     return 0
 
 
@@ -319,10 +384,23 @@ def cmd_knowledge_export(args, base) -> int:
     return 0
 
 
+def _load_engine_config():
+    """尽力加载引擎配置（缺失时返回 None）：用于 API Key 解析与自身 QQ 号排除。"""
+    from bot.engine.config import load_config
+
+    try:
+        return load_config()
+    except FileNotFoundError:
+        return None
+
+
 def cmd_update(args, db_path: Path, memory_root: Path) -> int:
     conn = db.connect(db_path)
     db.migrate(conn)
     store = MemoryStore(conn)
+
+    engine_config = _load_engine_config()
+    self_id = str(engine_config.onebot.expected_self_id or "") if engine_config else ""
 
     conversations = store.list_conversations()
     if args.conversation:
@@ -339,12 +417,20 @@ def cmd_update(args, db_path: Path, memory_root: Path) -> int:
             print(f"未找到会话：{args.conversation}")
             return 2
 
-    client = DeepSeekClient(api_key=args.api_key or None, model=args.model)
+    client = DeepSeekClient(
+        api_key=args.api_key
+        or (engine_config.llm.resolve_api_key() if engine_config else os.environ.get("DEEPSEEK_API_KEY", "")),
+        model=args.model,
+    )
     if not client.api_key:
-        print("未配置 DeepSeek API Key：请设置环境变量 DEEPSEEK_API_KEY，或用 --api-key 传入。")
+        print("未配置 DeepSeek API Key：请在配置 llm.api_key 填写，或设置环境变量 DEEPSEEK_API_KEY，或用 --api-key 传入。")
         return 2
 
-    config = UpdateConfig(batch_size=args.batch_size, recent_logs=args.recent_logs)
+    config = UpdateConfig(
+        batch_size=args.batch_size,
+        recent_logs=args.recent_logs,
+        exclude_user_ids=(self_id,) if self_id else (),
+    )
     batch_count = 0
     for conv in conversations:
         scope = f"{conv['platform']}:{conv['conversation_id']}"
@@ -382,7 +468,7 @@ def cmd_update(args, db_path: Path, memory_root: Path) -> int:
         print(f"没有攒满 {args.batch_size} 条的会话，未触发更新")
         return 0
     if not args.dry_run:
-        updated = snapshot.export_all(store, memory_root)
+        updated = snapshot.export_all(store, memory_root, exclude_user_ids=(self_id,) if self_id else ())
         print(f"快照导出：{len(updated)} 个文件有更新")
     return 0
 

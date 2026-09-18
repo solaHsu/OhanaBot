@@ -32,23 +32,36 @@ BASIC_LABELS = (
 EMPTY = "（暂无）"
 
 
-def export_all(store: MemoryStore, root: Path | str = DEFAULT_MEMORY_ROOT) -> list[Path]:
-    """导出全部快照，返回内容有更新的文件。"""
+def export_all(
+    store: MemoryStore,
+    root: Path | str = DEFAULT_MEMORY_ROOT,
+    exclude_user_ids: tuple[str, ...] = (),
+) -> list[Path]:
+    """导出全部快照，返回内容有更新的文件；exclude 内的用户不导出（如 Ohana 自身）。"""
     root = Path(root)
     updated: list[Path] = []
     for conv in store.list_conversations():
         platform = conv["platform"]
         conversation_id = conv["conversation_id"]
-        updated += export_persons(store, root, platform, conversation_id)
+        updated += export_persons(store, root, platform, conversation_id, exclude_user_ids)
         updated += export_logs(store, root, platform, conversation_id)
     return updated
 
 
-def export_persons(store: MemoryStore, root: Path, platform: str, conversation_id: str) -> list[Path]:
-    """导出某会话下每个人的一份 Markdown。"""
+def export_persons(
+    store: MemoryStore,
+    root: Path,
+    platform: str,
+    conversation_id: str,
+    exclude_user_ids: tuple[str, ...] = (),
+) -> list[Path]:
+    """导出某会话下每个人的一份 Markdown；exclude 内的用户跳过。"""
     updated = []
     conv_dir = root / "persons" / _conv_dir_name(platform, conversation_id)
+    excluded = set(exclude_user_ids)
     for user_id in store.list_user_ids(platform, conversation_id):
+        if user_id in excluded:
+            continue
         person = store.get_person(platform, conversation_id, user_id)
         content = render_person(
             platform,

@@ -20,6 +20,26 @@ from bot.engine.storage.memory_store import NAME_ALIAS, NAME_GROUP_NICKNAME, Mem
 PROMPT_PATH = Path(__file__).parent / "prompts" / "memory_update.txt"
 PROMPT_TEMPLATE = PROMPT_PATH.read_text(encoding="utf-8")
 
+_BASIC_LABELS = dict(BASIC_LABELS)
+
+
+def clean_basic(basic) -> dict:
+    """清洗基本画像字段：去掉值里重复携带的「维度名：」前缀（模型偶发）。"""
+    if not isinstance(basic, dict):
+        return {}
+    cleaned = {}
+    for key, value in basic.items():
+        text = str(value or "").strip()
+        label = _BASIC_LABELS.get(key)
+        if label:
+            for separator in ("：", ":"):
+                prefix = f"{label}{separator}"
+                if text.startswith(prefix):
+                    text = text[len(prefix) :].strip()
+                    break
+        cleaned[key] = text
+    return cleaned
+
 
 @dataclass
 class UpdateConfig:
@@ -28,6 +48,7 @@ class UpdateConfig:
     batch_size: int = 200  # 每满多少条消息触发一次
     recent_logs: int = 3  # 上下文携带的最近日常记录段数
     business_tz: timezone = timezone(timedelta(hours=8))  # 业务时区 Asia/Shanghai（无夏令时）
+    exclude_user_ids: tuple[str, ...] = ()  # 不建档的用户（如 Ohana 自身：自我由 soul/style 基线定义）
 
 
 @dataclass
@@ -69,7 +90,7 @@ def run_update(
     if apply:
         store.refresh_nicknames(platform, conversation_id, up_to_id=batch_to)
 
-    users = _involved_users(batch)
+    users = _involved_users(batch, config.exclude_user_ids)
     prompt = _fill_template(
         profiles=_render_profiles(store, platform, conversation_id, users),
         recent_logs=_render_recent_logs(store, platform, conversation_id, config.recent_logs),
@@ -120,7 +141,7 @@ def parse_update_output(content: str) -> dict:
         user_id = str(item.get("user_id") or "").strip()
         if not user_id:
             continue
-        basic = item.get("basic") if isinstance(item.get("basic"), dict) else {}
+        basic = clean_basic(item.get("basic"))
         aliases = [str(a).strip() for a in (item.get("aliases") or []) if str(a).strip()]
         entries = [str(e).strip() for e in (item.get("entries") or []) if str(e).strip()]
         profiles.append({"user_id": user_id, "basic": basic, "aliases": aliases, "entries": entries})
@@ -148,14 +169,18 @@ def _fill_template(profiles: str, recent_logs: str, messages: str) -> str:
     )
 
 
-def _involved_users(batch: list[dict]) -> dict[str, str]:
-    """涉及人物 = 本批消息的发言者 + 被 @ 的人；值取该人最新的昵称。"""
+def _involved_users(batch: list[dict], exclude_user_ids: tuple[str, ...] = ()) -> dict[str, str]:
+    """涉及人物 = 本批消息的发言者 + 被 @ 的人；值取该人最新的昵称；exclude 内的用户不参与建档。"""
+    excluded = set(exclude_user_ids)
     users: dict[str, str] = {}
     for message in batch:
         sender = message["user_id"]
-        name = message["display_name"] or users.get(sender, "")
-        users[sender] = name
+        if sender not in excluded:
+            name = message["display_name"] or users.get(sender, "")
+            users[sender] = name
         for mentioned in message.get("mentions") or []:
+            if mentioned in excluded:
+                continue
             users.setdefault(mentioned, "")
     return users
 

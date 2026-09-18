@@ -54,12 +54,12 @@
 
 1. 人格与风格基线（`bot/memory/soul.md`、`bot/memory/style.md`，启动时读取）；
 2. 本会话最近 2 段日常记录；
-3. 本批涉及人物的资料（基本画像 + 最近 5 条条目）；
+3. 本批涉及人物的资料（基本画像 + 最近 5 条条目；不含 Ohana 自身——自我由 soul/style 基线定义，避免自画像回灌造成人格漂移）；
 4. 群内最近 30 条对话（不含本批）；
 5. 本批新消息，格式 `[时间] 昵称(QQ号): 内容`（业务时区 +8）；
 6. 本批消息里的图片（最多 `engine.max_images_per_call` 张、单张 ≤ 10MB），由 `bot/engine/media.py` 取回并转 base64 随请求附带；取不到、格式不明或超限的跳过；长边超过 `engine.image_max_dimension`（默认 768）的静态图压缩为 JPEG 后附带；
 7. 链接内容：来源为本批卡片链接 + 最近 10 分钟内本会话出现过的卡片链接（内存记忆、去重；仅首次被携带时注入一次，随后失效），最多 `engine.max_links_per_call` 个，由 `bot/tools/web.py` 抓取标题与正文并注入；仅 http/https、跨主机重定向需过公网检查（防 SSRF）、2MB 上限、5 分钟缓存、失败静默跳过；
-8. 知识库摘录（`knowledge.enabled`）：以本批消息文本检索（jieba 分词 + BM25，命中实体时沿关系图扩展 `knowledge.graph_hops` 跳），命中才注入，最多 `knowledge.top_k` 块、合计 `knowledge.max_chars` 字的压缩摘录；不命中不注入（零 token）；来源为调研产物自动入库与 `manage knowledge rebuild` 的历史资料。整合层（`manage knowledge consolidate` 生成，`knowledge.inject_summaries` 可关）：命中实体时优先注入该实体的「知识档案」（跨文档事实合并、矛盾标注），同一板块 ≥2 个成员命中时追加「主题综述」（连通分量 + LLM 综述，成员数超阈值的大杂烩板块不生成）；整合结果可用 `manage knowledge export` 导出为 Markdown 快照（`runtime/knowledge/实体档案.md`、`主题综述.md`，内容有变化才写）。
+8. 知识库摘录（`knowledge.enabled`）：以本批消息文本检索（jieba 分词 + BM25，命中实体时沿关系图扩展 `knowledge.graph_hops` 跳），命中才注入，最多 `knowledge.top_k` 块、合计 `knowledge.max_chars` 字的压缩摘录；不命中不注入（零 token）；来源为调研产物自动入库与 `manage knowledge rebuild` 的历史资料。整合层（`manage knowledge consolidate` 生成，`knowledge.inject_summaries` 可关）：命中实体时优先注入该实体的「知识档案」（跨文档事实合并、矛盾标注），同一板块 ≥2 个成员命中时追加「主题综述」（连通分量 + LLM 综述，成员数超阈值的大杂烩板块不生成）；整合结果可用 `manage knowledge export` 导出为 Markdown 快照（`runtime/knowledge/实体档案.md`、`主题综述.md`，内容有变化才写）；检索命中时引擎打 INFO 日志（注入块数与标题），也可用 `manage knowledge query <文本>` 离线预览将注入的内容。
 
 硬触发批次附加“必须回复”提示。
 
@@ -86,6 +86,8 @@ python -m bot.engine.main
 
 - 配置文件：`config/bot.local.yaml`（模板 `config/bot.example.yaml`），包含白名单群、批窗口与限额、模型与密钥、OneBot 凭据。
 - 重型任务分流（`harness.backend: web`）首次使用先运行 `python -m bot.engine.manage harness-login` 完成网页版登录（有头窗口扫码；登录态保存在 `harness.web.profile_dir`，过期后重跑即可）；换账号用 `manage harness-login --reset`（旧登录态自动改名为时间戳备份，需要时改名回切）。
+- 知识整合（`manage knowledge consolidate`）默认用网页版生成档案/综述（`knowledge.consolidate_backend: web/api`，零 API token；未登录或缺依赖自动回退 API；`--think` 开深度思考，`--force` 强制重生成）；生成与引擎共用浏览器登录态，建议错峰运行。
+- 入库审核（`manage knowledge rebuild` 与任务完成后的自动入库）同样默认走网页版（`knowledge.classify_backend: web/api`）；自动入库在汇报发出后才执行（不影响群回复），网页版失败会自动回退 API 重试，避免丢知识。
 - 日志不记录密钥与聊天正文；判定与发送行为记录原因码（如 `reply:mention`、`decay:engaged`、`exit:command`）。
 
 ## 8. 当前边界

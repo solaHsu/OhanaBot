@@ -68,6 +68,8 @@ class KnowledgeConfig:
     min_matches: int = 2  # 词法命中词数下限（不足时仅实体图扩展可入选）
     graph_hops: int = 1  # 实体图扩展跳数（0 = 不做图扩展）
     inject_summaries: bool = True  # 命中实体时优先注入实体档案/主题综述（需先 consolidate 生成）
+    consolidate_backend: str = "web"  # 档案/综述生成后端：web = 网页版（零 API token）；api = DeepSeek API
+    classify_backend: str = "web"  # 入库审核（rebuild 与任务完成后自动入库）后端：web / api
 
 
 @dataclass
@@ -191,6 +193,8 @@ def load_config(path: Path | str | None = None) -> EngineConfig:
             min_matches=int(knowledge_raw.get("min_matches") or 2),
             graph_hops=int(knowledge_raw.get("graph_hops") if knowledge_raw.get("graph_hops") is not None else 1),
             inject_summaries=bool(knowledge_raw.get("inject_summaries", True)),
+            consolidate_backend=str(knowledge_raw.get("consolidate_backend") or "web"),
+            classify_backend=str(knowledge_raw.get("classify_backend") or "web"),
         ),
         policy=PolicyConfig(**policy_overrides),
     )

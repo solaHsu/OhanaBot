@@ -11,7 +11,7 @@ import itertools
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from bot.engine.config import EngineConfig, OneBotConfig
+from bot.engine.config import EngineConfig, KnowledgeConfig, OneBotConfig
 from bot.engine.context import parse_reply
 from bot.engine.onebot.parser import ImageRef, IncomingMessage
 from bot.engine.runtime import EngineRuntime
@@ -92,6 +92,7 @@ class RuntimeTests(unittest.TestCase):
             replies_per_hour=replies_per_hour,
             admins=list(admins),
             onebot=OneBotConfig(expected_self_id="424242", allowed_groups=["888888"]),
+            knowledge=KnowledgeConfig(classify_backend="api"),  # 单测不启动浏览器
         )
         calls = {"prompts": [], "sends": [], "images": []}
         payload = reply_json or '{"action": "reply", "text": "收到捏"}'
@@ -194,8 +195,8 @@ class RuntimeTests(unittest.TestCase):
         runtime.harness = FakeHarness()
         payloads = [
             json.dumps({"action": "task", "text": "", "task": "调研 X"}, ensure_ascii=False),
-            json.dumps({"kind": "knowledge", "title": "调研资料"}, ensure_ascii=False),  # 知识入库审核
             json.dumps({"action": "reply", "text": "调研好了捏"}, ensure_ascii=False),
+            json.dumps({"kind": "knowledge", "title": "调研资料"}, ensure_ascii=False),  # 汇报后入库审核
         ]
         runtime.generate = lambda prompt, images=None: payloads.pop(0)
         runtime.handle(make_msg("帮我调研一下 X", mentions_self=True))
@@ -211,6 +212,21 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(calls["sends"], [("group:888888", "调研好了捏")])
         # 调研结果已自动分类入库（知识类）
         self.assertEqual(store.conn.execute("SELECT COUNT(*) FROM knowledge_docs").fetchone()[0], 1)
+
+    def test_knowledge_injected_into_prompt(self):
+        runtime, store, calls, now = self._make()
+        runtime.knowledge.ingest_document(
+            title="绝区零资料",
+            source="test",
+            content="爱芮是《绝区零》妄想天使的主唱，和千夏同团。",
+            force_kind="knowledge",
+        )
+        runtime.handle(make_msg("爱芮和妄想天使是什么关系", mentions_self=True))
+        now[0] += timedelta(seconds=4)
+        runtime.tick()
+        self.assertTrue(calls["prompts"])
+        self.assertIn("【知识库摘录】", calls["prompts"][0])
+        self.assertIn("妄想天使", calls["prompts"][0])
 
     def test_task_action_without_harness_skipped(self):
         runtime, store, calls, now = self._make()

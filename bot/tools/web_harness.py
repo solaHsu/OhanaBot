@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import logging
 import re
@@ -29,6 +30,20 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOGIN_HINT = "python -m bot.engine.manage harness-login"
 INSTALL_HINT = "pip install playwright，再运行 python -m playwright install chromium"
+
+# 进程内浏览器串行锁：调研任务 / 入库审核 / 登录探测共用持久化登录态，避免并发启动冲突
+_BROWSER_LOCK = threading.Lock()
+
+
+def _serialized(method):
+    """浏览器会话串行化（模块内所有会启动浏览器的入口共用）。"""
+
+    @functools.wraps(method)
+    def wrapper(*args, **kwargs):
+        with _BROWSER_LOCK:
+            return method(*args, **kwargs)
+
+    return wrapper
 
 # 默认选择器与按钮文案（页面改版时优先在 harness.web.selectors 覆盖）
 DEFAULT_INPUT_SELECTORS = ("textarea#chat-input", "textarea", "div[role='textbox']")
@@ -134,6 +149,7 @@ class PlaywrightWebChat:
     def profile_dir(self) -> Path:
         return _resolve_dir(self.options.profile_dir)
 
+    @_serialized
     def ask(self, prompt: str, timeout: float) -> str:
         """发送一条提示词并取回回答；未登录抛 LoginRequired，等答案超时抛 TimeoutError。"""
         from playwright.sync_api import sync_playwright
@@ -431,6 +447,7 @@ class WebHarnessBridge:
             logger.warning("网页版任务文档落盘失败：%s", exc)
 
 
+@_serialized
 def login(profile_dir: str | Path, chat_url: str, timeout: float = 300.0, reset: bool = False) -> int:
     """有头打开网页版，检测到输入框（登录完成）后保存登录态并退出。
 
@@ -487,6 +504,47 @@ def _backup_profile(directory: Path) -> Path | None:
     backup = directory.with_name(f"{directory.name}.backup-{datetime.now():%Y%m%d-%H%M%S}")
     directory.rename(backup)
     return backup
+
+
+@_serialized
+def check_login(profile_dir: str | Path, chat_url: str, timeout: float = 30.0) -> bool:
+    """轻量探测登录态：无头打开页面，等输入框出现（不提问）；不可用时返回 False。"""
+    if not _playwright_available():
+        return False
+    from playwright.sync_api import sync_playwright
+
+    directory = _resolve_dir(profile_dir)
+    if not directory.exists():
+        return False
+    try:
+        with sync_playwright() as pw:
+            context = pw.chromium.launch_persistent_context(
+                str(directory),
+                headless=True,
+                locale="zh-CN",
+                user_agent=_HEADLESS_UA,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            try:
+                page = context.pages[0] if context.pages else context.new_page()
+                page.set_default_timeout(15000)
+                page.goto(chat_url, wait_until="domcontentloaded", timeout=45000)
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    for selector in DEFAULT_INPUT_SELECTORS:
+                        locator = page.locator(selector).last
+                        try:
+                            if locator.count() and locator.is_visible():
+                                return True
+                        except Exception:
+                            continue
+                    page.wait_for_timeout(1000)
+                return False
+            finally:
+                context.close()
+    except Exception as exc:
+        logger.warning("网页版登录态探测失败：%s", exc)
+        return False
 
 
 def _resolve_dir(path: str | Path) -> Path:

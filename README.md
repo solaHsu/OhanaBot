@@ -74,7 +74,7 @@ Ohana/
 1. 填写 `config/bot.local.yaml`：Ohana 的 QQ 号、允许的群、DeepSeek Key（或对应环境变量）与 OneBot 凭据。
 2. 部署 NapCat 并登录 Ohana 账号：开启 HTTP 服务（端口与配置 `onebot.api_base` 一致），在「网络配置 → HTTP 客户端」添加事件上报指向 `http://127.0.0.1:8080/`，密钥与配置 `event_secret` 保持一致。
 3. 启动：`python -m bot.engine.main`（`mode: dry_run` 只生成草稿；`live` + `engine.send_enabled: true` 才真正发送）。
-4. 记忆管理：`python -m bot.engine.manage init | export | update`（每个会话每满 200 条消息触发记忆压缩；`update --dry-run` 可预览）；重型任务分流用网页版后端（`harness.backend: web`）时先 `python -m bot.engine.manage harness-login` 登录一次；知识库由调研产物自动入库（知识类），可用 `python -m bot.engine.manage knowledge rebuild | consolidate | export | stats` 维护（`consolidate` 生成实体档案与主题综述，`export` 导出到 `runtime/knowledge/` 阅读）。
+4. 记忆管理：`python -m bot.engine.manage init | export | update`（每个会话每满 200 条消息触发记忆压缩；`update --dry-run` 可预览）；重型任务分流用网页版后端（`harness.backend: web`）时先 `python -m bot.engine.manage harness-login` 登录一次；知识库由调研产物自动入库（知识类），可用 `python -m bot.engine.manage knowledge rebuild | consolidate | export | query | stats` 维护（`consolidate` 生成实体档案与主题综述，默认网页版后端零 API token，`--backend api` 可切回 API；`export` 导出到 `runtime/knowledge/` 阅读，`query <文本>` 预览某句话会注入什么）。
 5. 测试：`python -m unittest discover -s tests`。
 
 设计入口见 [docs/README.md](docs/README.md)，实施顺序与验收标准见 [docs/implementation-plan.md](docs/implementation-plan.md)。

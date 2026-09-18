@@ -69,6 +69,8 @@ knowledge:
   min_matches: 2 # 词法命中词数下限
   graph_hops: 1 # 实体图扩展跳数（0 = 关闭）
   inject_summaries: true # 命中实体时优先注入实体档案/主题综述
+  consolidate_backend: web # 档案/综述生成后端：web = 网页版（零 API token）；api = DeepSeek API
+  classify_backend: web # 入库审核后端（rebuild 与自动入库）：web / api
 ```
 
 `mode` 的语义：`dry_run` 接收白名单事件、完整走判定与生成，但只打草稿不发送；`live` 且 `engine.send_enabled: true` 才真正发送。启动为软校验：缺少身份 / 白名单 / 密钥时仅告警；白名单为空则忽略全部群消息。
@@ -82,7 +84,7 @@ knowledge:
 5. 切换 `mode: live` 并开启 `engine.send_enabled`，重启后在测试群验证真实收发。
 6. 运行期维护：`manage update`（每会话满 200 条触发记忆压缩，`--dry-run` 可预览）、`manage export`（导出快照）。
 7. 重型任务分流选 `harness.backend: web` 时：先 `pip install playwright` 与 `python -m playwright install chromium`，再 `python -m bot.engine.manage harness-login` 完成一次有头登录；调研产物（Markdown 文档）落在 `runtime/harness/`。
-8. 知识库：`python -m bot.engine.manage knowledge rebuild` 将历史调研资料分类入库（新闻自动跳过，`--dry-run` 预览）；`knowledge consolidate` 生成实体档案与主题综述（整合层，未变化自动跳过）；`knowledge stats` 查看统计。
+8. 知识库：`python -m bot.engine.manage knowledge rebuild` 将历史调研资料分类入库（新闻自动跳过，`--dry-run` 预览）；`knowledge consolidate` 生成实体档案与主题综述（整合层，未变化自动跳过，默认网页版后端、零 API token）；`knowledge stats` 查看统计。
 
 ## 4. 验收清单
 

@@ -68,3 +68,5 @@ knowledge:
   min_matches: 2 # 词法命中词数下限（不足时仅实体图扩展可入选）
   graph_hops: 1 # 实体图扩展跳数（0 = 关闭图扩展）
   inject_summaries: true # 命中实体时优先注入实体档案/主题综述（需先运行 knowledge consolidate）
+  consolidate_backend: web # 档案/综述生成后端：web = 网页版（零 API token）；api = DeepSeek API
+  classify_backend: web # 入库审核后端（rebuild 与任务完成后自动入库）：web / api

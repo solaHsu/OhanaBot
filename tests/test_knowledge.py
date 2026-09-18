@@ -83,6 +83,12 @@ class ClassificationParseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             knowledge.parse_classification('{"kind": "unknown"}')
 
+    def test_prose_around_json_tolerated(self):
+        raw = '好的，这是审核结果：\n{"kind": "knowledge", "title": "标题"}\n希望有帮助。'
+        meta = knowledge.parse_classification(raw)
+        self.assertEqual(meta["kind"], "knowledge")
+        self.assertEqual(meta["title"], "标题")
+
 
 class IngestTests(unittest.TestCase):
     def setUp(self):
@@ -239,6 +245,12 @@ class SummaryParseTests(unittest.TestCase):
             knowledge.parse_summary("nope")
         with self.assertRaises(ValueError):
             knowledge.parse_summary('{"facts": []}')
+
+    def test_surrounding_prose_tolerated(self):
+        raw = '分析完成：\n```json\n{"summary": "概述", "facts": ["甲"]}\n```\n以上。'
+        parsed = knowledge.parse_summary(raw)
+        self.assertEqual(parsed["summary"], "概述")
+        self.assertEqual(parsed["facts"], ["甲"])
 
 
 def fake_summary_reply(summary="综合概述", facts=None, title=None):
@@ -469,6 +481,25 @@ class ContextRenderTests(unittest.TestCase):
         self.assertNotIn("{knowledge}", with_kb)
         self.assertNotIn("{knowledge}", without_kb)
 
+    def test_build_prompt_excludes_self_profile(self):
+        conn, store = make_store()
+        store.ensure_conversation("qq", "group:1", "测试群")
+        batch = [
+            types.SimpleNamespace(
+                message_id="m1",
+                user_id="self",
+                display_name="Ohana",
+                text="大家好",
+                sent_at="2026-09-17T10:00:00Z",
+            )
+        ]
+        prompt = context.build_reply_prompt(
+            "S", "Y", store, "qq", "group:1", batch, False, exclude_user_ids=("self",)
+        )
+        self.assertNotIn("## qq:self", prompt)
+        default = context.build_reply_prompt("S", "Y", store, "qq", "group:1", batch, False)
+        self.assertIn("## qq:self", default)
+
 
 class KnowledgeConfigTests(unittest.TestCase):
     def test_defaults(self):
@@ -480,13 +511,15 @@ class KnowledgeConfigTests(unittest.TestCase):
         self.assertEqual(config.min_matches, 2)
         self.assertEqual(config.graph_hops, 1)
         self.assertTrue(config.inject_summaries)
+        self.assertEqual(config.consolidate_backend, "web")
+        self.assertEqual(config.classify_backend, "web")
 
     def test_yaml_parse(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         path = Path(tmp.name) / "c.yaml"
         path.write_text(
-            "knowledge:\n  enabled: false\n  auto_ingest: false\n  top_k: 3\n  graph_hops: 0\n  inject_summaries: false\n",
+            "knowledge:\n  enabled: false\n  auto_ingest: false\n  top_k: 3\n  graph_hops: 0\n  inject_summaries: false\n  consolidate_backend: api\n  classify_backend: api\n",
             encoding="utf-8",
         )
         config = load_config(path).knowledge
@@ -495,6 +528,8 @@ class KnowledgeConfigTests(unittest.TestCase):
         self.assertEqual(config.top_k, 3)
         self.assertEqual(config.graph_hops, 0)
         self.assertFalse(config.inject_summaries)
+        self.assertEqual(config.consolidate_backend, "api")
+        self.assertEqual(config.classify_backend, "api")
 
 
 if __name__ == "__main__":

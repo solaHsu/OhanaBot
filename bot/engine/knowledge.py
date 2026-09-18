@@ -140,15 +140,29 @@ def _compact(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip())
 
 
-def parse_classification(content: str) -> dict:
-    """解析入库审核输出（容忍代码围栏），返回 {kind,title,entities,relations}。"""
+def _parse_json_object(content: str, label: str) -> dict:
+    """从模型输出中提取 JSON 对象（容忍代码围栏与前后说明文字，兼容网页版输出）。"""
     text = _FENCE_RE.sub("", (content or "").strip()).strip()
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"入库审核输出不是合法 json：{exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError("入库审核输出不是 json 对象")
+    start, end = text.find("{"), text.rfind("}")
+    candidates = [text]
+    if 0 <= start < end:
+        candidates.append(text[start : end + 1])
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            continue
+        if isinstance(data, dict):
+            return data
+        last_error = ValueError("输出不是 json 对象")
+    raise ValueError(f"{label}输出不是合法 json：{last_error}")
+
+
+def parse_classification(content: str) -> dict:
+    """解析入库审核输出（容忍代码围栏与前后说明文字），返回 {kind,title,entities,relations}。"""
+    data = _parse_json_object(content, "入库审核")
     kind = str(data.get("kind") or "").strip().lower()
     if kind not in ("knowledge", "news"):
         raise ValueError(f"未知资料类型：{kind!r}")
@@ -215,14 +229,8 @@ def _join_excerpts(excerpts: list[str]) -> str:
 
 
 def parse_summary(content: str, with_title: bool = False) -> dict:
-    """解析档案/综述输出（容忍代码围栏），返回 {summary, facts[, title]}。"""
-    text = _FENCE_RE.sub("", (content or "").strip()).strip()
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"摘要输出不是合法 json：{exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError("摘要输出不是 json 对象")
+    """解析档案/综述输出（容忍代码围栏与前后说明文字），返回 {summary, facts[, title]}。"""
+    data = _parse_json_object(content, "摘要")
     summary = str(data.get("summary") or "").strip()
     if not summary:
         raise ValueError("摘要输出缺少 summary")
@@ -281,6 +289,11 @@ class KnowledgeBase:
     @property
     def inject_summaries(self) -> bool:
         return bool(getattr(self.config, "inject_summaries", True))
+
+    @property
+    def classify_backend(self) -> str:
+        """入库审核后端：web = 网页版（零 API token）；api = DeepSeek API。"""
+        return str(getattr(self.config, "classify_backend", "api") or "api").strip().lower()
 
     # ---------- 入库 ----------
 
@@ -426,10 +439,11 @@ class KnowledgeBase:
         min_chunks: int = 2,
         limit: int = 50,
         max_members: int = 30,
+        force: bool = False,
         dry_run: bool = False,
         on_step=None,
     ) -> dict:
-        """批量生成实体档案与主题综述；来源未变化（digest 相同）则跳过；过大板块不生成。"""
+        """批量生成实体档案与主题综述；来源未变化则跳过（force=True 强制重生成）；过大板块不生成。"""
         report = {
             "entity_done": 0,
             "entity_skipped": 0,
@@ -440,12 +454,12 @@ class KnowledgeBase:
         }
         notify = on_step or (lambda _message: None)
         if scope in ("all", "entity"):
-            self._consolidate_entities(generate, min_chunks, limit, dry_run, notify, report)
+            self._consolidate_entities(generate, min_chunks, limit, force, dry_run, notify, report)
         if scope in ("all", "cluster"):
-            self._consolidate_clusters(generate, limit, max_members, dry_run, notify, report)
+            self._consolidate_clusters(generate, limit, max_members, force, dry_run, notify, report)
         return report
 
-    def _consolidate_entities(self, generate, min_chunks, limit, dry_run, notify, report) -> None:
+    def _consolidate_entities(self, generate, min_chunks, limit, force, dry_run, notify, report) -> None:
         with self.lock:
             rows = self.conn.execute(
                 """
@@ -468,7 +482,7 @@ class KnowledgeBase:
         for row in rows:
             chunk_ids = sorted(int(x) for x in str(row["chunk_ids"]).split(",") if x.strip())
             digest = _digest_of(chunk_ids)
-            if existing.get(row["name_key"]) == digest:
+            if not force and existing.get(row["name_key"]) == digest:
                 report["entity_skipped"] += 1
                 continue
             if dry_run:
@@ -486,7 +500,7 @@ class KnowledgeBase:
             notify(f"实体档案完成：{row['name']}（来源 {len(chunk_ids)} 块）")
             report["entity_done"] += 1
 
-    def _consolidate_clusters(self, generate, limit, max_members, dry_run, notify, report) -> None:
+    def _consolidate_clusters(self, generate, limit, max_members, force, dry_run, notify, report) -> None:
         components = self._components()
         with self.lock:
             existing = {
@@ -506,7 +520,7 @@ class KnowledgeBase:
             if processed >= limit:
                 break
             digest = _digest_of(members)
-            if existing.get(digest) == digest:
+            if not force and existing.get(digest) == digest:
                 report["cluster_skipped"] += 1
                 continue
             if dry_run:
