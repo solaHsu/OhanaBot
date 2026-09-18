@@ -86,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         base_url=config.llm.base_url,
         max_tokens=config.llm.max_tokens,
         reasoning_effort=config.llm.reasoning_effort,
+        retries=config.llm.retries,
     )
     if not llm.api_key:
         logger.warning(

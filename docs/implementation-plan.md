@@ -46,6 +46,7 @@ llm:
   api_key_env: DEEPSEEK_API_KEY
   reasoning_effort: high # 思考档位 none/minimal/low/medium/high（思考 token 计入 max_tokens，实测 high 约 1200）
   max_tokens: 8192 # 上限须覆盖思考 token + 回复正文（仅作保护，不实际扣费）
+  retries: 2 # 可重试失败（空输出/限流/网络抖动）自动重试次数；截断与鉴权不重试
 
 harness:
   enabled: false # 重型任务分流（action=task）
@@ -110,6 +111,6 @@ knowledge:
 
 ## 5. 故障处理
 
-- 生成失败 / 输出解析失败：跳过本批并记录日志，不影响后续消息。输出截断（`finish_reason=length`）说明思考 token 挤占了 `llm.max_tokens` 配额：调大 `llm.max_tokens`（参考 8192）或降低 `llm.reasoning_effort`。
+- 生成失败 / 输出解析失败：跳过本批并记录日志，不影响后续消息。可重试类失败（空输出 / 限流 429 / 5xx / 网络抖动）由客户端自动退避重试（`llm.retries`，默认 2 次）；输出截断（`finish_reason=length`）说明思考 token 挤占了 `llm.max_tokens` 配额：调大 `llm.max_tokens`（参考 8192）或降低 `llm.reasoning_effort`。
 - 发送结果未知：会话冻结，人工核对平台记录后重启恢复，不得直接重发。
 - 紧急停止：把 `engine.send_enabled` 改回 `false` 并重启（发送前检查立即生效）；已发出的 HTTP 请求不能撤销。

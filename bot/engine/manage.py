@@ -344,7 +344,9 @@ def _backend_generate(args, config, configured_backend: str, think: bool = False
             return generate, "web"
         backend = "api"
     client = DeepSeekClient(
-        api_key=args.api_key or config.llm.resolve_api_key() or None, model=args.model
+        api_key=args.api_key or config.llm.resolve_api_key() or None,
+        model=args.model,
+        retries=config.llm.retries,
     )
     if not client.api_key:
         print("未配置 DeepSeek API Key：请设置环境变量 DEEPSEEK_API_KEY，或用 --api-key 传入。")
@@ -421,6 +423,7 @@ def cmd_update(args, db_path: Path, memory_root: Path) -> int:
         api_key=args.api_key
         or (engine_config.llm.resolve_api_key() if engine_config else os.environ.get("DEEPSEEK_API_KEY", "")),
         model=args.model,
+        retries=(engine_config.llm.retries if engine_config else 2),
     )
     if not client.api_key:
         print("未配置 DeepSeek API Key：请在配置 llm.api_key 填写，或设置环境变量 DEEPSEEK_API_KEY，或用 --api-key 传入。")

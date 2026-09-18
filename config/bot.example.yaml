@@ -40,6 +40,7 @@ llm:
   api_key_env: DEEPSEEK_API_KEY # 或把 Key 放这个环境变量里
   reasoning_effort: high # 思考档位：none/minimal/low/medium/high；质量优先用 high，赶速度用 minimal
   max_tokens: 8192 # 输出上限，必须覆盖思考 token + 回复正文（仅作保护，不实际扣费）
+  retries: 2 # 可重试失败（空输出/限流/网络抖动）自动重试次数；截断与鉴权不重试
 
 harness:
   enabled: false # 重型任务分流（action=task）

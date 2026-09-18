@@ -53,6 +53,7 @@ class LLMConfig:
     api_key_env: str = "DEEPSEEK_API_KEY"
     reasoning_effort: str = "none"  # none=关闭思考（省钱防截断）；minimal/high 等档位开启
     max_tokens: int = 4096  # 输出上限（思考 token 也计入）
+    retries: int = 2  # 可重试失败（空输出/限流/网络抖动）的自动重试次数；截断与鉴权不重试
 
     def resolve_api_key(self) -> str:
         """API Key：本地直接值优先，否则按变量名查环境变量。"""
@@ -164,6 +165,7 @@ def load_config(path: Path | str | None = None) -> EngineConfig:
             api_key_env=str(llm_raw.get("api_key_env") or "DEEPSEEK_API_KEY"),
             reasoning_effort=str(llm_raw.get("reasoning_effort") or "none"),
             max_tokens=int(llm_raw.get("max_tokens") or 4096),
+            retries=int(llm_raw.get("retries") if llm_raw.get("retries") is not None else 2),
         ),
         harness=HarnessConfig(
             enabled=bool(harness_raw.get("enabled", False)),
