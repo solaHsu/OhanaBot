@@ -41,7 +41,7 @@ def build_reply_prompt(
     conversation_id: str,
     batch: list,
     must_reply: bool,
-    recent_limit: int = 30,
+    recent_limit: int = 200,
     has_images: bool = False,
     pages: list | None = None,
     knowledge: list | None = None,

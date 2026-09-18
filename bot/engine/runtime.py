@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
 import random
 import threading
@@ -20,10 +21,13 @@ from typing import Callable
 
 from bot.engine.config import REPO_ROOT, EngineConfig
 from bot.engine.context import build_reply_prompt, load_persona, parse_reply
+from bot.engine.growth import snapshot as growth_snapshot
+from bot.engine.growth.update import UpdateConfig, run_update
 from bot.engine.knowledge import KnowledgeBase
 from bot.engine.media import collect_image_data_urls
 from bot.engine.onebot.parser import IncomingMessage
 from bot.engine.policy import ConversationPolicy, MessageEvent, load_interests
+from bot.engine.storage import db
 from bot.engine.storage.db import now_iso
 from bot.engine.storage.memory_store import MemoryStore
 from bot.tools import harness as harness_tool
@@ -35,6 +39,7 @@ PLATFORM = "qq"
 MAX_BATCH_MESSAGES = 50
 RECENT_LINK_WINDOW_MINUTES = 10  # 近期卡片链接的记忆窗口
 MAX_RECENT_LINKS = 5  # 每会话保留的近期链接数
+PROMPT_KEEP_LATEST = 10  # 本地保留的提示词轮数（debug 用，超出自动清理最旧的）
 RECENT_IMAGE_WINDOW_MINUTES = 10  # 近期图片的记忆窗口（旁观态也算，供随后被呼唤/引用时附带）
 MAX_RECENT_IMAGES = 8  # 每会话保留的近期图片数
 FROZEN_RESET_HINT = "发送结果未知，已冻结该会话；请人工核对平台侧记录后重启引擎"
@@ -115,6 +120,10 @@ class EngineRuntime:
         self.knowledge = KnowledgeBase(store.conn, config.knowledge, lock=self.lock)
         if config.knowledge.enabled:
             logger.info("知识库已启用（auto_ingest=%s）", config.knowledge.auto_ingest)
+        self._prompt_dir = Path(config.database).parent / "prompts"  # 提示词全文落盘目录（排查用）
+        self._prompt_seq = itertools.count(1)  # 落盘序号（Windows 时钟粒度粗，时间戳会重复，附序号保证唯一）
+        self._memory_root = Path(config.database).parent / "memory"  # 记忆快照目录（与 manage --memory-root 默认一致）
+        self._growth_running: set[str] = set()  # 正在压记忆的会话（全局单飞；跑完自动让位）
         self._thread: threading.Thread | None = None
 
     # ---------- 生命周期 ----------
@@ -125,6 +134,8 @@ class EngineRuntime:
         self._thread = threading.Thread(target=self._loop, name="engine-tick", daemon=True)
         self._thread.start()
         logger.info("判定运行时已启动（批窗口 %.1f 秒，mode=%s）", self.config.merge_window_seconds, self.config.mode)
+        # 启动补处理：把重启前攒够批次的会话交给记忆更新（被动触发的入口之一）
+        self._scan_pending_growth()
 
     def _loop(self) -> None:
         while True:
@@ -172,6 +183,7 @@ class EngineRuntime:
                 conv.must_reply = conv.must_reply or decision.must_reply
                 if conv.batch_started is None:
                     conv.batch_started = now
+        self._maybe_grow(message.conversation_id)
 
     def tick(self, now: datetime | None = None) -> None:
         """周期检查：状态超时 + 到期的批窗口。"""
@@ -349,11 +361,13 @@ class EngineRuntime:
                 conversation_id,
                 batch,
                 must_reply,
+                recent_limit=self.config.recent_messages,
                 has_images=bool(images),
                 pages=pages,
                 knowledge=excerpts,
                 exclude_user_ids=(self.self_id,) if self.self_id else (),
             )
+        self._dump_prompt(conversation_id, "reply", prompt)
         try:
             content = self.generate(prompt, images=images or None)
         except Exception as exc:
@@ -388,6 +402,98 @@ class EngineRuntime:
         )
         thread.start()
         logger.info("%s：任务已交给 Harness 执行（%d 字）：%s", conversation_id, len(task), task[:60])
+
+    def _dump_prompt(self, conversation_id: str, kind: str, prompt: str) -> None:
+        """把发送给模型的提示词全文落盘（runtime/prompts/，滚动保留最新若干轮），便于排查上下文；失败不影响生成。"""
+        try:
+            self._prompt_dir.mkdir(parents=True, exist_ok=True)
+            safe_id = "".join(ch if ch.isalnum() else "_" for ch in conversation_id)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            path = self._prompt_dir / f"{stamp}-{next(self._prompt_seq):06d}-{safe_id}-{kind}.md"
+            path.write_text(prompt, encoding="utf-8")
+            for stale in sorted(self._prompt_dir.glob("*.md"))[:-PROMPT_KEEP_LATEST]:
+                stale.unlink(missing_ok=True)
+            logger.info("%s：提示词全文已落盘：%s", conversation_id, path.name)
+        except OSError as exc:
+            logger.warning("%s：提示词落盘失败（忽略）：%s", conversation_id, exc)
+
+    def _maybe_grow(self, conversation_id: str) -> None:
+        """被动触发记忆更新：待压缩消息满一批时启动后台压缩（全局单飞，抢不到等下批消息）。"""
+        if not self.config.growth.enabled:
+            return
+        with self.lock:
+            if self._growth_running:
+                return
+            pending = self.store.count_pending_messages(PLATFORM, conversation_id)
+            if pending < self.config.growth.batch_size:
+                return
+            self._growth_running.add(conversation_id)
+        logger.info("%s：待压缩消息 %d 条，启动记忆更新", conversation_id, pending)
+        threading.Thread(
+            target=self._growth_worker,
+            args=(conversation_id,),
+            name=f"growth-{conversation_id}",
+            daemon=True,
+        ).start()
+
+    def _growth_worker(self, conversation_id: str) -> None:
+        """后台压缩到不足一批为止，再导出快照；失败不推游标，等下批消息后重试。"""
+        healthy = False
+        try:
+            conn = db.connect(self.config.database)  # 独立连接：LLM 调用期间不占共享锁
+            try:
+                store = MemoryStore(conn)
+                config = UpdateConfig(
+                    batch_size=self.config.growth.batch_size,
+                    recent_logs=self.config.growth.recent_logs,
+                    exclude_user_ids=(self.self_id,) if self.self_id else (),
+                )
+                batches = 0
+                failed = False
+                while True:
+                    try:
+                        result = run_update(store, self.generate, PLATFORM, conversation_id, config)
+                    except Exception as exc:
+                        logger.warning("%s：记忆更新失败（游标未动，下批消息后重试）：%s", conversation_id, exc)
+                        failed = True
+                        break
+                    if result is None:
+                        break
+                    batches += 1
+                    logger.info(
+                        "%s：记忆更新第 %d 批完成（msg-%d ~ msg-%d，画像 %d 人、新条目 %d、新绰号 %d、记录第 %d 段）",
+                        conversation_id,
+                        batches,
+                        result.msg_from,
+                        result.msg_to,
+                        result.profiles_updated,
+                        result.entries_added,
+                        result.aliases_added,
+                        result.log_seq,
+                    )
+                if batches:
+                    updated = growth_snapshot.export_all(
+                        store,
+                        self._memory_root,
+                        exclude_user_ids=(self.self_id,) if self.self_id else (),
+                    )
+                    logger.info("%s：记忆快照导出（%d 个文件有更新）", conversation_id, len(updated))
+                healthy = not failed and batches > 0  # 全部成功收尾才接力，失败等下批消息重试
+            finally:
+                conn.close()
+        except Exception:
+            logger.exception("%s：记忆更新线程异常", conversation_id)
+        finally:
+            with self.lock:
+                self._growth_running.discard(conversation_id)
+            if healthy:
+                self._scan_pending_growth()  # 接力：单飞位空出后接着安排其他攒满的会话
+
+    def _scan_pending_growth(self) -> None:
+        """把攒满一批的其他会话交给记忆更新（全局单飞：先到先得，其余等下一轮接力）。"""
+        for conv in self.store.list_conversations():
+            if conv["platform"] == PLATFORM:
+                self._maybe_grow(conv["conversation_id"])
 
     def _knowledge_excerpts(self, batch) -> list:
         """按本批文本检索知识库（失败静默，不影响生成）。"""
@@ -483,6 +589,7 @@ class EngineRuntime:
                 + result
                 + "\n\n请基于以上结果，用你的风格给群里回一条消息（仍然只输出 json，action 只能 reply 或 silence）。"
             )
+            self._dump_prompt(conversation_id, "report", follow_up)
             with self.lock:
                 conv.call_times.append(self._clock())
             try:

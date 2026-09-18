@@ -11,7 +11,7 @@ import itertools
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from bot.engine.config import EngineConfig, KnowledgeConfig, OneBotConfig
+from bot.engine.config import EngineConfig, GrowthConfig, KnowledgeConfig, OneBotConfig
 from bot.engine.context import parse_reply
 from bot.engine.onebot.parser import ImageRef, IncomingMessage
 from bot.engine.runtime import EngineRuntime
@@ -77,7 +77,17 @@ class ParseReplyTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
-    def _make(self, *, mode="dry_run", send_enabled=False, replies_per_hour=20, admins=("1",), reply_json=None):
+    def _make(
+        self,
+        *,
+        mode="dry_run",
+        send_enabled=False,
+        replies_per_hour=20,
+        admins=("1",),
+        reply_json=None,
+        growth_json=None,
+        growth_enabled=True,
+    ):
         tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(tmpdir.cleanup)
         db_path = Path(tmpdir.name) / "rt.sqlite3"
@@ -94,11 +104,16 @@ class RuntimeTests(unittest.TestCase):
             admins=list(admins),
             onebot=OneBotConfig(expected_self_id="424242", allowed_groups=["888888"]),
             knowledge=KnowledgeConfig(classify_backend="api"),  # 单测不启动浏览器
+            growth=GrowthConfig(enabled=growth_enabled),
         )
-        calls = {"prompts": [], "sends": [], "images": []}
+        calls = {"prompts": [], "sends": [], "images": [], "growth": []}
         payload = reply_json or '{"action": "reply", "text": "收到捏"}'
+        update_payload = growth_json or '{"log": "本批聊了一小阵子。", "profiles": []}'
 
         def generate(prompt: str, images=None) -> str:
+            if "群聊记忆整理员" in prompt:  # 记忆更新任务的提示词（与回复提示词区分）
+                calls["growth"].append(prompt)
+                return update_payload
             calls["prompts"].append(prompt)
             calls["images"].append(list(images or []))
             return payload
@@ -356,6 +371,54 @@ class RuntimeTests(unittest.TestCase):
         conv = runtime.state("group:888888")
         self.assertEqual(conv.policy.phase, "engaged")
 
+    def test_growth_auto_trigger_when_batch_full(self):
+        runtime, store, calls, now = self._make()
+        for i in range(200):
+            store.add_message("qq", "group:888888", f"h-{i}", "10002", "旧客", f"历史消息{i}", "2026-09-16T04:00:00Z")
+        runtime.handle(make_msg("刚来的新消息"))
+        deadline = time.time() + 5
+        while time.time() < deadline and not store.list_logs("qq", "group:888888"):
+            time.sleep(0.05)
+        logs = store.list_logs("qq", "group:888888")
+        self.assertEqual(len(logs), 1)
+        self.assertEqual((logs[0]["msg_from"], logs[0]["msg_to"]), (1, 200))
+        self.assertEqual(store.cursor("qq", "group:888888"), 200)
+        self.assertEqual(len(calls["growth"]), 1)
+        self.assertIn("历史消息0", calls["growth"][0])
+
+    def test_growth_not_triggered_below_batch(self):
+        runtime, store, calls, now = self._make()
+        for i in range(50):
+            store.add_message("qq", "group:888888", f"h-{i}", "10002", "旧客", f"消息{i}", "2026-09-16T04:00:00Z")
+        runtime.handle(make_msg("还差得远"))
+        self.assertEqual(calls["growth"], [])
+        self.assertEqual(store.list_logs("qq", "group:888888"), [])
+        self.assertEqual(store.cursor("qq", "group:888888"), 0)
+
+    def test_growth_failure_keeps_cursor(self):
+        runtime, store, calls, now = self._make(growth_json="不是 json")
+        for i in range(200):
+            store.add_message("qq", "group:888888", f"h-{i}", "10002", "旧客", f"历史消息{i}", "2026-09-16T04:00:00Z")
+        runtime.handle(make_msg("触发但输出解析会失败"))
+        deadline = time.time() + 5
+        while time.time() < deadline and runtime._growth_running:
+            time.sleep(0.05)
+        self.assertEqual(len(calls["growth"]), 1)
+        self.assertEqual(store.cursor("qq", "group:888888"), 0)  # 失败不推游标
+        self.assertEqual(store.list_logs("qq", "group:888888"), [])
+
+    def test_prompt_dump_keeps_latest_ten(self):
+        runtime, store, calls, now = self._make()
+        for i in range(12):
+            runtime._dump_prompt("group:888888", "reply", f"第 {i} 轮上下文")
+        files = sorted(runtime._prompt_dir.glob("*.md"))
+        self.assertEqual(len(files), 10)
+        texts = [path.read_text(encoding="utf-8") for path in files]
+        self.assertIn("第 11 轮上下文", texts)
+        self.assertIn("第 2 轮上下文", texts)  # 滚动保留最新 10 轮：第 2 ~ 11 轮
+        self.assertNotIn("第 1 轮上下文", texts)
+        self.assertNotIn("第 0 轮上下文", texts)
+
 
 class ConfigDefaultsTests(unittest.TestCase):
     def test_engine_defaults(self):
@@ -366,6 +429,7 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(config.max_images_per_call, 3)
         self.assertEqual(config.image_max_dimension, 768)
         self.assertEqual(config.max_links_per_call, 2)
+        self.assertEqual(config.recent_messages, 200)
         self.assertFalse(config.harness.enabled)
         self.assertEqual(config.harness.backend, "cli")
         self.assertEqual(config.harness.command, "dsh")
@@ -378,6 +442,9 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(config.policy.attend_window_minutes, 15.0)
         self.assertAlmostEqual(config.policy.lucky_engage_probability, 0.003)
         self.assertEqual(config.onebot.self_aliases, ["ohana", "欧哈娜"])
+        self.assertTrue(config.growth.enabled)
+        self.assertEqual(config.growth.batch_size, 200)
+        self.assertEqual(config.growth.recent_logs, 3)
 
 
 if __name__ == "__main__":

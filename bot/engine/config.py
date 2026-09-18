@@ -74,6 +74,13 @@ class KnowledgeConfig:
 
 
 @dataclass
+class GrowthConfig:
+    enabled: bool = True  # 记忆更新（画像 / 日常记录）自动触发：待压缩满一批即后台执行
+    batch_size: int = 200  # 待压缩消息达到该条数触发（与对话上下文窗口对齐）
+    recent_logs: int = 3  # 更新上下文携带的最近日常记录段数
+
+
+@dataclass
 class HarnessConfig:
     enabled: bool = False  # 重型任务分流（cli 需 dsh；web 需 playwright）
     backend: str = "cli"  # cli = dsh headless；web = DeepSeek 网页版自动化
@@ -95,11 +102,13 @@ class EngineConfig:
     max_images_per_call: int = 3  # 每次生成附带的本批图片上限
     image_max_dimension: int = 768  # 图片压缩后长边上限（0 表示不压缩）
     max_links_per_call: int = 2  # 每次生成抓取的链接上限
+    recent_messages: int = 200  # 生成时携带的群内最近对话条数（不含本批）
     admins: list[str] = field(default_factory=list)  # /exit 等指令的可用账号
     onebot: OneBotConfig = field(default_factory=OneBotConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     harness: HarnessConfig = field(default_factory=HarnessConfig)
     knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
+    growth: GrowthConfig = field(default_factory=GrowthConfig)  # 记忆更新（自动触发）
     policy: PolicyConfig = field(default_factory=PolicyConfig)  # 判定参数（yaml `policy:` 可选覆盖）
 
 
@@ -123,6 +132,7 @@ def load_config(path: Path | str | None = None) -> EngineConfig:
     llm_raw = data.get("llm") or {}
     harness_raw = data.get("harness") or {}
     knowledge_raw = data.get("knowledge") or {}
+    growth_raw = data.get("growth") or {}
     policy_raw = data.get("policy") or {}
     policy_overrides: dict = {}
     for key, value in policy_raw.items():
@@ -143,6 +153,7 @@ def load_config(path: Path | str | None = None) -> EngineConfig:
         max_images_per_call=int(engine_raw.get("max_images_per_call") or 3),
         image_max_dimension=int(image_max_dimension_raw) if image_max_dimension_raw is not None else 768,
         max_links_per_call=int(engine_raw.get("max_links_per_call") or 2),
+        recent_messages=int(engine_raw.get("recent_messages") or 200),
         admins=[str(uid) for uid in admins_raw],
         onebot=OneBotConfig(
             api_base=str(onebot_raw.get("api_base") or "http://127.0.0.1:3000"),
@@ -197,6 +208,11 @@ def load_config(path: Path | str | None = None) -> EngineConfig:
             inject_summaries=bool(knowledge_raw.get("inject_summaries", True)),
             consolidate_backend=str(knowledge_raw.get("consolidate_backend") or "web"),
             classify_backend=str(knowledge_raw.get("classify_backend") or "web"),
+        ),
+        growth=GrowthConfig(
+            enabled=bool(growth_raw.get("enabled", True)),
+            batch_size=int(growth_raw.get("batch_size") or 200),
+            recent_logs=int(growth_raw.get("recent_logs") or 3),
         ),
         policy=PolicyConfig(**policy_overrides),
     )

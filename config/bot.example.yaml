@@ -28,6 +28,7 @@ engine:
   max_images_per_call: 3 # 每次生成附带的本批图片上限（多模态）
   image_max_dimension: 768 # 图片长边上限（超大图自动压缩省 token；0 表示不压缩）
   max_links_per_call: 2 # 每次生成抓取的链接上限（分享卡片正文注入）
+  recent_messages: 200 # 生成时携带的群内最近对话条数（不含本批；与记忆压缩批大小对齐）
 
 policy: # 判定参数（可选；覆盖 bot/engine/policy/machine.py 的默认值）
   attend_window_minutes: 15 # 关注期时长：第三次触发（兴趣集命中）的时限，超时回旁观
@@ -71,3 +72,8 @@ knowledge:
   inject_summaries: true # 命中实体时优先注入实体档案/主题综述（需先运行 knowledge consolidate）
   consolidate_backend: web # 档案/综述生成后端：web = 网页版（零 API token）；api = DeepSeek API
   classify_backend: web # 入库审核后端（rebuild 与任务完成后自动入库）：web / api
+
+growth: # 记忆更新自动触发（人物画像 / 日常记录压缩）
+  enabled: true # 待压缩消息满一批即在后台执行；失败不推进游标，下批消息后重试
+  batch_size: 200 # 触发阈值（与对话上下文窗口对齐；手动 manage update 同参数）
+  recent_logs: 3 # 更新上下文携带的最近日常记录段数

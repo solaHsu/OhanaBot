@@ -83,7 +83,7 @@ knowledge:
 3. 初始化：`python -m bot.engine.manage init`（建库、建目录、建链接，可重复执行）。
 4. 以 `mode: dry_run` 启动 `python -m bot.engine.main`，发测试消息，确认入库日志与草稿输出正常。
 5. 切换 `mode: live` 并开启 `engine.send_enabled`，重启后在测试群验证真实收发。
-6. 运行期维护：`manage update`（每会话满 200 条触发记忆压缩，`--dry-run` 可预览）、`manage export`（导出快照）。
+6. 运行期维护：记忆更新已自动触发（引擎内待压缩满 200 条即后台压缩并导出快照，`growth:` 段可调）；也可手动 `manage update`（`--dry-run` 可预览）、`manage export`（导出快照）。
 7. 重型任务分流选 `harness.backend: web` 时：先 `pip install playwright` 与 `python -m playwright install chromium`，再 `python -m bot.engine.manage harness-login` 完成一次有头登录；调研产物（Markdown 文档）落在 `runtime/harness/`。
 8. 知识库：`python -m bot.engine.manage knowledge rebuild` 将历史调研资料分类入库（新闻自动跳过，`--dry-run` 预览）；`knowledge consolidate` 生成实体档案与主题综述（整合层，未变化自动跳过，默认网页版后端、零 API token）；`knowledge stats` 查看统计。
 
@@ -102,7 +102,7 @@ knowledge:
 | 限额 | 达到每小时模型调用上限后跳过生成并记录 |
 | 发送记录 | 发送成功后自消息入库（含平台 message_id） |
 | 发送未知 | 发送结果未知时会话被冻结，不再自动发送 |
-| 记忆更新 | 满 200 条后 `manage update` 更新画像 / 条目 / 日常记录并前移游标；失败不写库 |
+| 记忆更新 | 待压缩满 200 条自动触发（引擎后台压缩画像 / 条目 / 日常记录并前移游标，同步导出快照）；失败不写库，下批消息后重试；`manage update` 可手动补跑 |
 | 快照 | `manage export` 只输出有变化的 Markdown 文件 |
 | 跨会话隔离 | 一个群的消息与画像不出现在其他会话的上下文里 |
 | 链接抓取 | 分享卡片（含随后被 @ 或提及）后正文注入生成；内网 / 非 http(s) 地址被拒绝 |
