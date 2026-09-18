@@ -35,7 +35,14 @@ PLATFORM = "qq"
 MAX_BATCH_MESSAGES = 50
 RECENT_LINK_WINDOW_MINUTES = 10  # 近期卡片链接的记忆窗口
 MAX_RECENT_LINKS = 5  # 每会话保留的近期链接数
+RECENT_IMAGE_WINDOW_MINUTES = 10  # 近期图片的记忆窗口（旁观态也算，供随后被呼唤/引用时附带）
+MAX_RECENT_IMAGES = 8  # 每会话保留的近期图片数
 FROZEN_RESET_HINT = "发送结果未知，已冻结该会话；请人工核对平台侧记录后重启引擎"
+
+
+def _image_key(ref) -> str:
+    """图片去重键：优先 URL，其次文件名。"""
+    return getattr(ref, "url", "") or getattr(ref, "file", "")
 
 
 @dataclass
@@ -48,6 +55,7 @@ class ConversationState:
     call_times: list = field(default_factory=list)  # 滚动一小时的调用时间
     frozen: bool = False
     recent_links: list = field(default_factory=list)  # [(url, 出现时间)] 近期卡片链接
+    recent_images: list = field(default_factory=list)  # [(ImageRef, 来源消息ID, 出现时间)] 近期图片（含旁观态）
     task_running: bool = False  # 是否有 Harness 任务在执行
 
     def clear_pending(self) -> None:
@@ -139,6 +147,7 @@ class EngineRuntime:
                 logger.info("%s：管理员 %s 执行 /exit → 旁观", message.conversation_id, message.user_id)
                 return
             self._remember_links(conv, message, now)
+            self._remember_images(conv, message, now)
             decision = conv.policy.on_message(
                 MessageEvent(
                     sender_id=message.user_id,
@@ -219,6 +228,22 @@ class EngineRuntime:
             conv.recent_links.append((url, now))
         conv.recent_links = conv.recent_links[-MAX_RECENT_LINKS:]
 
+    def _remember_images(self, conv: ConversationState, message: IncomingMessage, now: datetime) -> None:
+        """记住消息里的图片（旁观态也算），供随后被呼唤/引用时一并附带。"""
+        if not message.images:
+            return
+        window = RECENT_IMAGE_WINDOW_MINUTES * 60
+        conv.recent_images = [
+            (ref, mid, seen)
+            for ref, mid, seen in conv.recent_images
+            if (now - seen).total_seconds() <= window
+        ]
+        for ref in message.images:
+            key = _image_key(ref)
+            conv.recent_images = [(r, m, t) for r, m, t in conv.recent_images if _image_key(r) != key]
+            conv.recent_images.append((ref, message.message_id, now))
+        conv.recent_images = conv.recent_images[-MAX_RECENT_IMAGES:]
+
     def _replies_to_ohana(self, message: IncomingMessage) -> bool:
         if not message.replies_to or not self.self_id:
             return False
@@ -239,7 +264,47 @@ class EngineRuntime:
                 logger.info("%s：本小时调用已达上限（%d），跳过本批", conversation_id, len(conv.call_times))
                 return
             conv.call_times.append(now)
-            image_refs = [ref for message in batch for ref in message.images]
+            batch_image_refs = [ref for message in batch for ref in message.images]
+            batch_image_keys = {_image_key(ref) for ref in batch_image_refs}
+            quoted_ids = {message.replies_to for message in batch if message.replies_to}
+            image_window = RECENT_IMAGE_WINDOW_MINUTES * 60
+            fresh_recent_images = [
+                (ref, mid, seen)
+                for ref, mid, seen in conv.recent_images
+                if (now - seen).total_seconds() <= image_window
+            ]
+            # 被本批消息引用的图片优先，其次批次内图片，最后按从新到旧补位
+            quoted_recent = [item for item in reversed(fresh_recent_images) if item[1] in quoted_ids]
+            other_recent = [item for item in reversed(fresh_recent_images) if item[1] not in quoted_ids]
+            image_refs: list = []
+            seen_image_keys: set[str] = set()
+            recent_consumed: set[str] = set()
+            for ref, _mid, _seen in quoted_recent:
+                key = _image_key(ref)
+                if key not in seen_image_keys:
+                    seen_image_keys.add(key)
+                    image_refs.append(ref)
+                    recent_consumed.add(key)
+            for ref in batch_image_refs:
+                key = _image_key(ref)
+                if key not in seen_image_keys:
+                    seen_image_keys.add(key)
+                    image_refs.append(ref)
+            for ref, _mid, _seen in other_recent:
+                key = _image_key(ref)
+                if key not in seen_image_keys:
+                    seen_image_keys.add(key)
+                    image_refs.append(ref)
+                    recent_consumed.add(key)
+            if batch_image_keys & recent_consumed:
+                recent_consumed -= batch_image_keys  # 批次内已有的不重复消费
+            # 消费后移除：近期图片只在“首次被携带”的那一轮生效（与近期链接同规则；批次内图片同样消费）
+            consumed_keys = recent_consumed | batch_image_keys
+            conv.recent_images = [
+                (ref, mid, seen)
+                for ref, mid, seen in fresh_recent_images
+                if _image_key(ref) not in consumed_keys
+            ]
             link_refs = [link for message in batch for link in message.links]
             window = RECENT_LINK_WINDOW_MINUTES * 60
             fresh_recent = [
@@ -260,7 +325,8 @@ class EngineRuntime:
             else []
         )
         if images:
-            logger.info("%s：附带 %d 张图片参与生成", conversation_id, len(images))
+            extra = f"（含最近窗口 {len(recent_consumed)} 张）" if recent_consumed else ""
+            logger.info("%s：附带 %d 张图片参与生成%s", conversation_id, len(images), extra)
         pages = (
             web_tools.collect_page_texts(link_refs, limit=self.config.max_links_per_call)
             if link_refs

@@ -28,6 +28,7 @@ def make_msg(
     mentions_self: bool = False,
     images: tuple = (),
     links: tuple = (),
+    replies_to: str | None = None,
 ) -> IncomingMessage:
     return IncomingMessage(
         conversation_id="group:888888",
@@ -38,7 +39,7 @@ def make_msg(
         text=text,
         mentions=(),
         mentions_self=mentions_self,
-        replies_to=None,
+        replies_to=replies_to,
         sent_at="2026-09-16T12:00:00Z",
         images=tuple(images),
         links=tuple(links),
@@ -148,6 +149,62 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(len(calls["images"][0]), 1)
         self.assertTrue(calls["images"][0][0].startswith("data:image/png;base64,"))
         self.assertIn("已随提示一并提供", calls["prompts"][0])
+
+    def test_recent_image_attached_across_windows(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "recent.png"
+        path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x01" * 16)
+        runtime, store, calls, now = self._make()
+        # 旁观态来了一张图（不触发判定、不进批次）；随后被点名时仍应附带
+        runtime.handle(make_msg("", images=(ImageRef(url="", file=str(path)),)))
+        now[0] += timedelta(seconds=10)
+        runtime.handle(make_msg("ohana 看看这个", mentions_self=True))
+        now[0] += timedelta(seconds=4)
+        runtime.tick()
+        self.assertEqual(len(calls["images"][0]), 1)
+        self.assertTrue(calls["images"][0][0].startswith("data:image/png;base64,"))
+        # 已被携带过 → 下一次生成不再附带
+        runtime.handle(make_msg("再聊聊", mentions_self=True))
+        now[0] += timedelta(seconds=4)
+        runtime.tick()
+        self.assertEqual(calls["images"][1], [])
+
+    def test_recent_image_expires_after_window(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "old.png"
+        path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x02" * 16)
+        runtime, store, calls, now = self._make()
+        runtime.handle(make_msg("", images=(ImageRef(url="", file=str(path)),)))
+        now[0] += timedelta(minutes=11)  # 超过记忆窗口
+        runtime.handle(make_msg("ohana 在吗", mentions_self=True))
+        now[0] += timedelta(seconds=4)
+        runtime.tick()
+        self.assertEqual(calls["images"][0], [])
+
+    def test_quoted_image_attached_with_new_image(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path_old = Path(tmp.name) / "old.png"
+        path_new = Path(tmp.name) / "new.png"
+        path_old.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x03" * 16)
+        path_new.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x04" * 16)
+        runtime, store, calls, now = self._make()
+        first = make_msg("", images=(ImageRef(url="", file=str(path_old)),))
+        runtime.handle(first)  # 旧图进入最近窗口
+        now[0] += timedelta(seconds=30)
+        runtime.handle(
+            make_msg(
+                "ohana 这张呢",
+                mentions_self=True,
+                replies_to=first.message_id,
+                images=(ImageRef(url="", file=str(path_new)),),
+            )
+        )
+        now[0] += timedelta(seconds=4)
+        runtime.tick()
+        self.assertEqual(len(calls["images"][0]), 2)  # 被引用的旧图 + 新图都附带
 
     def test_batch_link_pages_injected(self):
         from bot.tools import web as web_tools
@@ -317,6 +374,7 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(config.harness.web.profile_dir, "runtime/harness/web_profile")
         self.assertEqual(config.llm.reasoning_effort, "none")
         self.assertEqual(config.llm.max_tokens, 4096)
+        self.assertEqual(config.llm.retries, 2)
         self.assertEqual(config.policy.attend_window_minutes, 15.0)
         self.assertAlmostEqual(config.policy.lucky_engage_probability, 0.003)
         self.assertEqual(config.onebot.self_aliases, ["ohana", "欧哈娜"])
