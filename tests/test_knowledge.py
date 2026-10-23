@@ -484,6 +484,7 @@ class ContextRenderTests(unittest.TestCase):
     def test_build_prompt_excludes_self_profile(self):
         conn, store = make_store()
         store.ensure_conversation("qq", "group:1", "测试群")
+        store.upsert_person_basic("qq", "group:1", "self", {"personality": "机器人"})
         batch = [
             types.SimpleNamespace(
                 message_id="m1",
@@ -499,6 +500,39 @@ class ContextRenderTests(unittest.TestCase):
         self.assertNotIn("## qq:self", prompt)
         default = context.build_reply_prompt("S", "Y", store, "qq", "group:1", batch, False)
         self.assertIn("## qq:self", default)
+
+    def test_build_prompt_includes_recent_participants(self):
+        """相关人物不只含本批：最近对话里的发言者也应注入画像。"""
+        conn, store = make_store()
+        store.ensure_conversation("qq", "group:1", "测试群")
+        store.add_message("qq", "group:1", "m1", "u1", "甲", "先聊一句", "2026-09-17T10:00:00Z")
+        store.add_message("qq", "group:1", "m2", "u2", "乙", "接一句", "2026-09-17T10:01:00Z")
+        store.upsert_person_basic("qq", "group:1", "u1", {"personality": "爱较真"})
+        store.upsert_person_basic("qq", "group:1", "u2", {"personality": "话痨"})
+        batch = [
+            types.SimpleNamespace(
+                message_id="m3", user_id="u3", display_name="丙", text="在吗",
+                sent_at="2026-09-17T10:02:00Z",
+            )
+        ]
+        prompt = context.build_reply_prompt("S", "Y", store, "qq", "group:1", batch, False)
+        self.assertIn("## qq:u1", prompt)
+        self.assertIn("## qq:u2", prompt)
+        self.assertNotIn("## qq:u3", prompt)  # 无任何资料的人不占位
+
+    def test_build_prompt_includes_batch_mentions(self):
+        """本批被 @ 但未发言的人也视为相关人物。"""
+        conn, store = make_store()
+        store.ensure_conversation("qq", "group:1", "测试群")
+        store.upsert_person_basic("qq", "group:1", "u9", {"interests": "摄影"})
+        batch = [
+            types.SimpleNamespace(
+                message_id="m1", user_id="u1", display_name="甲", text="@u9 看看这个",
+                sent_at="2026-09-17T10:00:00Z", mentions=("u9",),
+            )
+        ]
+        prompt = context.build_reply_prompt("S", "Y", store, "qq", "group:1", batch, False)
+        self.assertIn("## qq:u9", prompt)
 
 
 class KnowledgeConfigTests(unittest.TestCase):

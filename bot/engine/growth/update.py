@@ -3,7 +3,7 @@
 设计依据 analysis/proposals/memory_plan_v0.2.md §6：
 - 触发：会话待压缩消息 ≥ batch_size（默认 200）；
 - 上下文：本批消息 + 涉及人物资料（发言人 + 被 @ 的人）+ 最近几段日常记录；
-- 产物：基本画像覆盖、绰号/条目追加、一段新日常记录、游标前移。
+- 产物：基本画像融合重写（覆盖）、绰号改判（新增 / 撤销）与条目追加、一段新日常记录、游标前移。
 """
 
 from __future__ import annotations
@@ -64,6 +64,7 @@ class UpdateResult:
     log_seq: int | None = None
     entries_added: int = 0
     aliases_added: int = 0
+    aliases_removed: int = 0
 
 
 def run_update(
@@ -119,6 +120,7 @@ def run_update(
         result.log_seq = counters["log_seq"]
         result.entries_added = counters["entries_added"]
         result.aliases_added = counters["aliases_added"]
+        result.aliases_removed = counters["aliases_removed"]
     return result
 
 
@@ -143,8 +145,17 @@ def parse_update_output(content: str) -> dict:
             continue
         basic = clean_basic(item.get("basic"))
         aliases = [str(a).strip() for a in (item.get("aliases") or []) if str(a).strip()]
+        remove_aliases = [str(a).strip() for a in (item.get("remove_aliases") or []) if str(a).strip()]
         entries = [str(e).strip() for e in (item.get("entries") or []) if str(e).strip()]
-        profiles.append({"user_id": user_id, "basic": basic, "aliases": aliases, "entries": entries})
+        profiles.append(
+            {
+                "user_id": user_id,
+                "basic": basic,
+                "aliases": aliases,
+                "remove_aliases": remove_aliases,
+                "entries": entries,
+            }
+        )
     return {"log": log_text, "profiles": profiles}
 
 

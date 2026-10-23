@@ -4,6 +4,7 @@
     python -m bot.engine.manage init     # 建库、建目录、建 bot/ 链接（可重复执行）
     python -m bot.engine.manage export   # 导出全部 Markdown 快照（内容有变化才写）
     python -m bot.engine.manage update   # 对攒满一批消息的会话执行记忆更新（需 DEEPSEEK_API_KEY）
+    python -m bot.engine.manage refine   # 离线重写人物画像：融合成长期稳定版（需 DEEPSEEK_API_KEY）
     python -m bot.engine.manage harness-login  # 登录 DeepSeek 网页版并保存登录态（harness.backend=web 用）
     python -m bot.engine.manage knowledge rebuild  # 扫描 runtime/harness/ 资料重建知识库（自动分类）
 
@@ -65,6 +66,14 @@ def main(argv: list[str] | None = None) -> int:
     p_update.add_argument("--api-key", default="", help="API Key（默认读环境变量 DEEPSEEK_API_KEY）")
     p_update.add_argument("--dry-run", action="store_true", help="只调用模型预览，不写库")
 
+    p_refine = sub.add_parser(
+        "refine", parents=[common], help="离线重写人物画像：融合成长期稳定版（需 DEEPSEEK_API_KEY）"
+    )
+    p_refine.add_argument("--conversation", default="", help="只处理指定会话，如 qq:group:123456")
+    p_refine.add_argument("--model", default=DEFAULT_MODEL, help=f"模型名（默认 {DEFAULT_MODEL}）")
+    p_refine.add_argument("--api-key", default="", help="API Key（默认读配置或环境变量）")
+    p_refine.add_argument("--dry-run", action="store_true", help="只调用模型预览，不写库")
+
     p_login = sub.add_parser(
         "harness-login", help="登录 DeepSeek 网页版并保存登录态（harness.backend=web 用）"
     )
@@ -112,6 +121,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_init(Path(args.db), Path(args.memory_root))
     if args.command == "update":
         return cmd_update(args, Path(args.db), Path(args.memory_root))
+    if args.command == "refine":
+        return cmd_refine(args, Path(args.db), Path(args.memory_root))
     if args.command == "harness-login":
         return cmd_harness_login(args)
     if args.command == "knowledge":
@@ -470,6 +481,68 @@ def cmd_update(args, db_path: Path, memory_root: Path) -> int:
     if batch_count == 0:
         print(f"没有攒满 {args.batch_size} 条的会话，未触发更新")
         return 0
+    if not args.dry_run:
+        updated = snapshot.export_all(store, memory_root, exclude_user_ids=(self_id,) if self_id else ())
+        print(f"快照导出：{len(updated)} 个文件有更新")
+    return 0
+
+
+def cmd_refine(args, db_path: Path, memory_root: Path) -> int:
+    """离线重写人物画像：把已有 basic 融合成长期稳定版（不依赖新消息）。"""
+    from bot.engine.growth import refine as growth_refine
+
+    conn = db.connect(db_path)
+    db.migrate(conn)
+    store = MemoryStore(conn)
+
+    engine_config = _load_engine_config()
+    self_id = str(engine_config.onebot.expected_self_id or "") if engine_config else ""
+
+    conversations = store.list_conversations()
+    if args.conversation:
+        if ":" not in args.conversation:
+            print(f"会话格式应为 平台:类型:ID（如 qq:group:123456）：{args.conversation}")
+            return 2
+        platform, conversation_id = args.conversation.split(":", 1)
+        conversations = [
+            c
+            for c in conversations
+            if c["platform"] == platform and c["conversation_id"] == conversation_id
+        ]
+        if not conversations:
+            print(f"未找到会话：{args.conversation}")
+            return 2
+
+    client = DeepSeekClient(
+        api_key=args.api_key
+        or (engine_config.llm.resolve_api_key() if engine_config else os.environ.get("DEEPSEEK_API_KEY", "")),
+        model=args.model,
+        retries=(engine_config.llm.retries if engine_config else 2),
+    )
+    if not client.api_key:
+        print("未配置 DeepSeek API Key：请在配置 llm.api_key 填写，或设置环境变量 DEEPSEEK_API_KEY，或用 --api-key 传入。")
+        return 2
+
+    total = {"refined": 0, "skipped": 0, "failed": 0, "entries_added": 0}
+    for conv in conversations:
+        scope = f"{conv['platform']}:{conv['conversation_id']}"
+        print(f"{scope}：")
+        report = growth_refine.refine_profiles(
+            store,
+            client.generate,
+            conv["platform"],
+            conv["conversation_id"],
+            exclude_user_ids=(self_id,) if self_id else (),
+            apply=not args.dry_run,
+            on_step=print,
+        )
+        for key in total:
+            total[key] += report[key]
+
+    print(
+        f"完成：重写 {total['refined']} 人、跳过 {total['skipped']}、失败 {total['failed']}、"
+        f"新增条目 {total['entries_added']}"
+    )
     if not args.dry_run:
         updated = snapshot.export_all(store, memory_root, exclude_user_ids=(self_id,) if self_id else ())
         print(f"快照导出：{len(updated)} 个文件有更新")

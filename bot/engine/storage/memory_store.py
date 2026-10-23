@@ -327,12 +327,13 @@ class MemoryStore:
         msg_to: int,
         seen_at: str,
     ) -> dict:
-        """一次更新任务的全部写入：画像覆盖、绰号/条目追加、记录段追加、游标前移。
+        """一次更新任务的全部写入：画像覆盖、绰号改判/追加、条目追加、记录段追加、游标前移。
 
         单事务提交；失败整体回滚（游标不前进，可安全重跑）。
-        返回 {"aliases_added", "entries_added", "log_seq"}。
+        返回 {"aliases_added", "aliases_removed", "entries_added", "log_seq"}。
         """
         aliases_added = 0
+        aliases_removed = 0
         entries_added = 0
         timestamp = now_iso()
         with transaction(self.conn) as c:
@@ -351,6 +352,18 @@ class MemoryStore:
                         """,
                         (platform, conversation_id, user_id, _basic_json(basic), timestamp),
                     )
+                for alias in profile.get("remove_aliases") or []:
+                    alias = str(alias).strip()
+                    if not alias:
+                        continue
+                    cur = c.execute(
+                        """
+                        DELETE FROM names
+                        WHERE platform = ? AND conversation_id = ? AND user_id = ? AND kind = ? AND text = ?
+                        """,
+                        (platform, conversation_id, user_id, NAME_ALIAS, alias),
+                    )
+                    aliases_removed += cur.rowcount or 0
                 for alias in profile.get("aliases") or []:
                     alias = str(alias).strip()
                     if not alias:
@@ -413,7 +426,12 @@ class MemoryStore:
                 """,
                 (msg_to, timestamp, platform, conversation_id),
             )
-        return {"aliases_added": aliases_added, "entries_added": entries_added, "log_seq": log_seq}
+        return {
+            "aliases_added": aliases_added,
+            "aliases_removed": aliases_removed,
+            "entries_added": entries_added,
+            "log_seq": log_seq,
+        }
 
 
 def _basic_json(basic: dict) -> str:

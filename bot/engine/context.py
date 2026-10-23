@@ -1,7 +1,7 @@
 """回复生成的上下文组装与输出解析（标准 §3.3 / engine-spec §5）。
 
 - 人格与风格：启动时读取 bot/memory/soul.md 与 style.md（冻结基线）；
-- 记忆注入：本会话最近的日常记录 + 本批涉及人物的画像资料；
+- 记忆注入：本会话最近的日常记录 + 相关人物（本批发言人 + 被 @ 者 + 最近对话的发言人）的画像资料；
 - 输出约定：{"action": "reply"|"silence", "text": "..."}（json 模式）。
 """
 
@@ -24,6 +24,7 @@ MUST_REPLY_NOTE = "（注意：上面这批消息在直接找 Ohana，必须给�
 IMAGE_NOTE = "（本批消息里 [图片] 的实际画面已随提示一并提供，可直接看图内容。）"
 ENTRIES_PER_PERSON = 5
 RECENT_LOGS = 2
+MAX_PROFILES = 30  # 相关人物资料注入的人数上限（本批优先，其次最近发言人按新→旧；超出的老发言人靠后丢弃）
 
 
 def load_persona() -> tuple[str, str]:
@@ -53,11 +54,7 @@ def build_reply_prompt(
     recent = [row for row in recent_rows if row["message_id"] not in batch_ids][-recent_limit:]
 
     excluded = set(exclude_user_ids)
-    user_ids = [
-        user_id
-        for user_id in dict.fromkeys(message.user_id for message in batch)
-        if user_id not in excluded
-    ]
+    user_ids = _participant_ids(batch, recent, excluded)[:MAX_PROFILES]
     return (
         PROMPT_TEMPLATE.replace("{soul}", soul)
         .replace("{style}", style)
@@ -70,6 +67,29 @@ def build_reply_prompt(
         .replace("{pages}", _render_pages(pages))
         .replace("{knowledge}", _render_knowledge(knowledge))
     )
+
+
+def _participant_ids(batch: list, recent: list[dict], excluded: set[str]) -> list[str]:
+    """相关人物候选：本批发言人 + 本批被 @ 的人 + 最近对话的发言人。
+
+    去重后按优先级排序：本批相关者在前（最贴近当前回复），其余最近发言人按新→旧排；
+    exclude 内的用户（如 Ohana 自身）不参与。
+    """
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def add(user_id: str) -> None:
+        if user_id and user_id not in excluded and user_id not in seen:
+            seen.add(user_id)
+            ordered.append(user_id)
+
+    for message in batch:
+        add(message.user_id)
+        for mentioned in getattr(message, "mentions", ()) or ():
+            add(mentioned)
+    for row in reversed(recent):  # recent 为旧→新，倒序让最近发言者优先
+        add(row["user_id"])
+    return ordered
 
 
 def parse_reply(content: str) -> dict:
@@ -146,6 +166,8 @@ def _render_profiles(store: MemoryStore, platform: str, conversation_id: str, us
         person = store.get_person(platform, conversation_id, user_id)
         entries = store.list_entries(platform, conversation_id, user_id)
         names = store.list_names(platform, conversation_id, user_id, NAME_GROUP_NICKNAME)
+        if not (person or entries or names):
+            continue  # 没有任何资料的人不占位，避免噪音与 token 浪费
         current = names[-1]["text"] if names else ""
         heading = f"## {platform}:{user_id}" + (f"（{current}）" if current else "")
         lines = [heading]

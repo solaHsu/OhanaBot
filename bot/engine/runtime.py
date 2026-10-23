@@ -461,7 +461,7 @@ class EngineRuntime:
                         break
                     batches += 1
                     logger.info(
-                        "%s：记忆更新第 %d 批完成（msg-%d ~ msg-%d，画像 %d 人、新条目 %d、新绰号 %d、记录第 %d 段）",
+                        "%s：记忆更新第 %d 批完成（msg-%d ~ msg-%d，画像 %d 人、新条目 %d、新绰号 %d、删绰号 %d、记录第 %d 段）",
                         conversation_id,
                         batches,
                         result.msg_from,
@@ -469,6 +469,7 @@ class EngineRuntime:
                         result.profiles_updated,
                         result.entries_added,
                         result.aliases_added,
+                        result.aliases_removed,
                         result.log_seq,
                     )
                 if batches:
