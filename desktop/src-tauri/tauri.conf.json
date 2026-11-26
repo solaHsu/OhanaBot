@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Ohana",
+  "version": "0.1.0",
+  "identifier": "app.ohanabot.desktop",
+  "build": { "frontendDist": "../ui" },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [{
+      "label": "main",
+      "title": "Ohana",
+      "width": 1320,
+      "height": 860,
+      "minWidth": 760,
+      "minHeight": 560
+    }],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; style-src 'self'; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": ["icons/icon.png", "icons/icon.ico"],
+    "resources": {
+      "../../bot/__init__.py": "python/bot/__init__.py",
+      "../../bot/core/__init__.py": "python/bot/core/__init__.py",
+      "../../bot/core/chat.py": "python/bot/core/chat.py",
+      "../../bot/core/storage.py": "python/bot/core/storage.py",
+      "../../bot/apps/__init__.py": "python/bot/apps/__init__.py",
+      "../../bot/apps/_http.py": "python/bot/apps/_http.py",
+      "../../bot/apps/chat.py": "python/bot/apps/chat.py",
+      "../../bot/apps/desktop.py": "python/bot/apps/desktop.py"
+    }
+  }
+}

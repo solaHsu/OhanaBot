@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Ohana · 桌面工作区</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" aria-label="工作区导航">
+      <div class="brand"><div class="brand-mark" aria-hidden="true">O</div><div><strong>Ohana</strong><span>桌面工作区</span></div></div>
+      <nav class="navigation" aria-label="工作台">
+        <p class="nav-label">工作台</p>
+        <button class="nav-item" type="button" data-page="chat" aria-label="主对话" aria-current="page"><span class="glyph" aria-hidden="true">◌</span><span class="item-name">主对话</span></button>
+        <button class="nav-item" type="button" data-page="activity" aria-label="活动记录"><span class="glyph" aria-hidden="true">≡</span><span class="item-name">活动记录</span></button>
+        <p class="nav-label apps-label">外部应用</p>
+        <button class="nav-item app-item" type="button" data-page="qq" aria-label="QQ 设置"><span class="app-mark qq-mark" aria-hidden="true">Q</span><span class="item-name">QQ</span><span class="app-state" id="qq-nav-state">未连接</span></button>
+        <button class="nav-item app-item" type="button" data-page="feishu" aria-label="飞书设置"><span class="app-mark feishu-mark" aria-hidden="true">飞</span><span class="item-name">飞书</span><span class="app-state" id="feishu-nav-state">未连接</span></button>
+      </nav>
+      <div class="sidebar-footer"><span class="local-indicator" aria-hidden="true"></span><div><strong>本地工作区</strong><span id="surface-label">桌面模式</span></div></div>
+    </aside>
+
+    <div class="desk">
+      <header class="topbar">
+        <div class="location"><span id="section-name">工作台</span><span class="separator" aria-hidden="true">/</span><strong id="page-name">主对话</strong></div>
+        <div class="header-actions">
+          <button class="quiet mode" id="model-button" type="button"><span class="mode-dot" aria-hidden="true"></span><span id="model-label">正在读取</span></button>
+          <button class="outline" id="session-button" type="button">会话</button>
+          <button class="primary" id="new-chat" type="button" data-operation><span aria-hidden="true">＋</span> 新对话</button>
+        </div>
+      </header>
+      <div class="notice" id="notice" role="status" hidden></div>
+      <main class="main">
+        <section class="chat-page" id="page-chat" aria-label="主对话">
+          <div class="chat-main">
+            <div class="conversation" id="conversation-scroll">
+              <div class="welcome" id="welcome">
+                <div class="welcome-mark" aria-hidden="true"><span>O</span></div>
+                <h1>今天想聊些什么？</h1>
+                <p>整理想法、梳理计划，或从一句话开始。</p>
+                <div class="suggestions" aria-label="对话示例">
+                  <button type="button" data-prompt="帮我把手头的事情整理成一份待办清单。"><span aria-hidden="true">＋</span> 整理待办</button>
+                  <button type="button" data-prompt="帮我梳理一个计划，先问我几个需要明确的问题。"><span aria-hidden="true">＋</span> 梳理计划</button>
+                </div>
+              </div>
+              <div class="messages" id="messages" role="log" aria-label="对话消息" hidden></div>
+            </div>
+            <div class="compose-area">
+              <form class="composer" id="chat-form">
+                <label class="sr-only" for="chat-input">消息</label>
+                <textarea id="chat-input" rows="2" maxlength="16000" placeholder="给 Ohana 发消息…"></textarea>
+                <div class="composer-actions"><span class="keyboard-hint">Enter 发送 <span aria-hidden="true">·</span> Shift + Enter 换行</span><button class="primary send" id="send" type="submit" aria-label="发送消息" data-operation>发送 <span aria-hidden="true">↗</span></button></div>
+              </form>
+              <div class="compose-meta"><span id="chat-mode-note">正在读取工作区</span><span id="conversation-label"></span></div>
+            </div>
+          </div>
+          <aside class="recent" aria-label="近期活动">
+            <div class="recent-header"><h2>近期活动</h2><button class="text-button" type="button" data-page="activity">查看全部 <span aria-hidden="true">↗</span></button></div>
+            <p class="recent-description">这里会留下 Ohana 的执行结果和对工作区的变更。</p>
+            <div id="recent-activity" class="activity-list"></div>
+          </aside>
+        </section>
+
+        <section class="settings-page inner-page" id="page-app" aria-labelledby="app-title" hidden>
+          <div class="page-heading"><span class="app-mark large" id="app-icon" aria-hidden="true"></span><div><h1 id="app-title"></h1><p id="app-description"></p></div></div>
+          <div class="connection-card"><div><h2>连接状态</h2><p>群聊和私聊偏好保存在本地，接入平台后使用。</p></div><span class="connection-status"><span aria-hidden="true"></span>未连接</span></div>
+          <form id="app-form" class="settings-form">
+            <div class="setting-block"><div class="setting-heading"><div><h2><label for="app-groups">群聊</label></h2><p id="groups-help">每行填写一个群标识。</p></div><span id="group-count" class="count">0 个群</span></div>
+              <textarea id="app-groups" rows="4" spellcheck="false" aria-describedby="groups-help"></textarea>
+            </div>
+            <label class="setting-block toggle-row"><span><strong>允许私聊</strong><small>在此应用的接入配置中启用私聊。</small></span><input type="checkbox" id="allow-private" role="switch"><span class="switch" aria-hidden="true"></span></label>
+            <div class="save-row"><span id="settings-note" role="status"></span><button class="primary" type="submit" data-operation>保存配置</button></div>
+          </form>
+        </section>
+
+        <section class="inner-page activity-page" id="page-activity" aria-labelledby="activity-title" hidden>
+          <div class="page-heading"><div><h1 id="activity-title">活动记录</h1><p>查看 Ohana 的回复、执行异常和本地配置变更。</p></div></div>
+          <div class="filter-row" aria-label="筛选活动"><button type="button" data-filter="all" aria-pressed="true">全部</button><button type="button" data-filter="chat" aria-pressed="false">对话</button><button type="button" data-filter="settings" aria-pressed="false">应用配置</button></div>
+          <div id="all-activity" class="activity-list full-activity"></div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="session-dialog" aria-labelledby="session-title">
+    <form id="restore-form">
+      <h2 id="session-title">恢复会话</h2>
+      <p>输入一个已有的会话 ID，可继续本地对话。</p>
+      <label for="restore-id">会话 ID</label>
+      <input type="text" id="restore-id" required spellcheck="false" autocomplete="off">
+      <p class="dialog-error" id="restore-error" role="status"></p>
+      <div class="dialog-actions"><button class="outline" type="button" data-close="session-dialog">取消</button><button class="primary" type="submit" data-operation>恢复</button></div>
+    </form>
+  </dialog>
+  <dialog id="model-dialog" aria-labelledby="model-title">
+    <h2 id="model-title">聊天模型</h2>
+    <p id="model-description"></p>
+    <p>设置 <code>OHANA_MODEL_URL</code> 和 <code>OHANA_MODEL</code> 后重新启动。需要鉴权的模型还需设置 <code>OHANA_MODEL_API_KEY</code>。</p>
+    <div class="dialog-actions"><button class="primary" type="button" data-close="model-dialog">关闭</button></div>
+  </dialog>
+</body>
+</html>

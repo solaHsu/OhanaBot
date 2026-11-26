@@ -1,6 +1,16 @@
 # Ohana
 
-**Ohana** —— 由 Agent 全程驱动的独立数字生命：在网络上发帖、评论、对话，拥有自己的名字、记忆、原则与思想。
+Ohana 当前的开发主线是可扩展的聊天内核和本地一对一聊天终端。内核提供会话、消息和并行子会话转发。可以先离线验证收发和会话存储。
+
+```powershell
+python -m bot.apps.chat --echo --debug
+```
+
+模型配置、会话恢复和飞书应用的说明见 [聊天内核与应用](docs/chat-core.md)。
+
+桌面版使用 Tauri，提供主对话、QQ 和飞书的独立配置页，以及活动记录。安装 Tauri 的 Windows 开发依赖后，从仓库根目录执行 `cargo run --manifest-path desktop/src-tauri/Cargo.toml`。如需先在浏览器中试用，同样可通过 [桌面版运行说明](docs/chat-core.md#桌面工作区) 启动本机预览。
+
+以下为历史 QQ 群聊项目的运行与开发资料，保留供参考。
 
 ## 项目结构
 

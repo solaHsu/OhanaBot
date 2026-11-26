@@ -1,0 +1,1 @@
+"""Feishu office assistant application."""
